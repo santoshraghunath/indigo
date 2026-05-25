@@ -65,10 +65,11 @@ function DetailRow({ label, value }: { label: string; value: React.ReactNode }) 
 // ── Phase progress bar ─────────────────────────────────────────────────────
 
 const PHASE_STATUS_COLOR: Record<string, string> = {
-  complete:    '#16a34a',
-  in_progress: '#6366f1',
-  pending:     '#d1d5db',
-  on_hold:     '#f59e0b',
+  complete:     '#16a34a',
+  approved:     '#16a34a',
+  in_progress:  '#6366f1',
+  not_started:  '#d1d5db',
+  blocked:      '#ef4444',
 }
 
 function PhaseBar({ phase }: { phase: { name: string; status: string; color: string | null; milestones: Array<{ status: string }> } }) {
