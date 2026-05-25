@@ -176,6 +176,86 @@ export async function getProject(client: SupabaseClient, projectId: string) {
   return data as ProjectRow
 }
 
+// ── Financials types ───────────────────────────────────────────────────────
+
+export interface ProjectChangeOrder {
+  id: string
+  co_number: string
+  title: string | null
+  description: string
+  amount_cents: number
+  co_status: string | null
+  date_submitted: string | null
+  approved_at: string | null
+  schedule_impact_days: number | null
+  created_at: string
+}
+
+export interface ProjectDrawRequest {
+  id: string
+  number: number
+  status: string
+  amount_requested_cents: number
+  amount_approved_cents: number
+  amount_funded_cents: number
+  percent_complete_at_draw: number | null
+  submitted_at: string | null
+  approved_at: string | null
+  funded_at: string | null
+  notes: string | null
+}
+
+export interface ProjectDrawSchedule {
+  id: string
+  lender_name: string | null
+  lender_contact: string | null
+  lender_email: string | null
+  loan_amount_cents: number | null
+  holdback_pct: number
+  created_at: string
+  draw_requests: ProjectDrawRequest[]
+}
+
+export interface ProjectInvoice {
+  id: string
+  invoice_number: string
+  invoice_date: string
+  due_date: string
+  invoice_status: string | null
+  total_cents: number
+  amount_paid_cents: number
+  balance_due_cents: number
+  sent_at: string | null
+  paid_at: string | null
+}
+
+// ── Documents types ────────────────────────────────────────────────────────
+
+export interface ProjectDocumentFolder {
+  id: string
+  name: string
+  type: string | null
+  sequence: number
+  is_client_visible: boolean
+  parent_id: string | null
+}
+
+export interface ProjectDocument {
+  id: string
+  folder_id: string | null
+  type: string
+  name: string
+  description: string | null
+  mime_type: string | null
+  file_size_bytes: number | null
+  version: number
+  is_client_visible: boolean
+  tags: string[]
+  uploaded_by: string | null
+  created_at: string
+  updated_at: string
+}
+
 // ── Phases + milestones ────────────────────────────────────────────────────
 
 export async function getProjectPhases(
@@ -220,4 +300,111 @@ export async function getProjectPhases(
 
   if (error) throw error
   return (data ?? []) as ProjectPhase[]
+}
+
+// ── Change orders ──────────────────────────────────────────────────────────
+
+export async function getProjectChangeOrders(
+  client: SupabaseClient,
+  jobId: string,
+  tenantId: string,
+): Promise<ProjectChangeOrder[]> {
+  const { data, error } = await client
+    .from('job_change_orders')
+    .select(`
+      id, co_number, title, description, amount_cents,
+      co_status, date_submitted, approved_at,
+      schedule_impact_days, created_at
+    `)
+    .eq('job_id', jobId)
+    .eq('tenant_id', tenantId)
+    .order('created_at', { ascending: true })
+
+  if (error) throw error
+  return (data ?? []) as ProjectChangeOrder[]
+}
+
+// ── Draw schedule ──────────────────────────────────────────────────────────
+
+export async function getProjectDrawSchedule(
+  client: SupabaseClient,
+  jobId: string,
+  tenantId: string,
+): Promise<ProjectDrawSchedule | null> {
+  const { data, error } = await client
+    .from('draw_schedules')
+    .select(`
+      id, lender_name, lender_contact, lender_email,
+      loan_amount_cents, holdback_pct, created_at,
+      draw_requests (
+        id, number, status,
+        amount_requested_cents, amount_approved_cents, amount_funded_cents,
+        percent_complete_at_draw, submitted_at, approved_at, funded_at, notes
+      )
+    `)
+    .eq('job_id', jobId)
+    .eq('tenant_id', tenantId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) throw error
+  return data as ProjectDrawSchedule | null
+}
+
+// ── Client invoices ────────────────────────────────────────────────────────
+
+export async function getProjectInvoices(
+  client: SupabaseClient,
+  jobId: string,
+  tenantId: string,
+): Promise<ProjectInvoice[]> {
+  const { data, error } = await client
+    .from('invoices')
+    .select(`
+      id, invoice_number, invoice_date, due_date,
+      invoice_status, total_cents, amount_paid_cents,
+      balance_due_cents, sent_at, paid_at
+    `)
+    .eq('job_id', jobId)
+    .eq('tenant_id', tenantId)
+    .order('invoice_date', { ascending: false })
+
+  if (error) throw error
+  return (data ?? []) as ProjectInvoice[]
+}
+
+// ── Documents ──────────────────────────────────────────────────────────────
+
+export async function getProjectDocuments(
+  client: SupabaseClient,
+  projectId: string,
+  tenantId: string,
+): Promise<{ folders: ProjectDocumentFolder[]; documents: ProjectDocument[] }> {
+  const [foldersRes, docsRes] = await Promise.all([
+    client
+      .from('document_folders')
+      .select('id, name, type, sequence, is_client_visible, parent_id')
+      .eq('project_id', projectId)
+      .eq('tenant_id', tenantId)
+      .order('sequence', { ascending: true }),
+    client
+      .from('documents')
+      .select(`
+        id, folder_id, type, name, description, mime_type,
+        file_size_bytes, version, is_client_visible, tags,
+        uploaded_by, created_at, updated_at
+      `)
+      .eq('project_id', projectId)
+      .eq('tenant_id', tenantId)
+      .order('created_at', { ascending: false }),
+  ])
+
+  if (foldersRes.error) throw foldersRes.error
+  if (docsRes.error) throw docsRes.error
+
+  return {
+    folders:   (foldersRes.data ?? []) as ProjectDocumentFolder[],
+    documents: (docsRes.data ?? []) as ProjectDocument[],
+  }
 }

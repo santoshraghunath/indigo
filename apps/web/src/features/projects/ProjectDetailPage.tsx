@@ -14,8 +14,8 @@ function tabs(id: string): Tab[] {
   return [
     { to: `/projects/${id}/overview`,    label: 'Overview',    live: true },
     { to: `/projects/${id}/schedule`,    label: 'Schedule',    live: true },
-    { to: `/projects/${id}/financials`,  label: 'Financials' },
-    { to: `/projects/${id}/documents`,   label: 'Documents' },
+    { to: `/projects/${id}/financials`,  label: 'Financials', live: true },
+    { to: `/projects/${id}/documents`,   label: 'Documents',  live: true },
     { to: `/projects/${id}/field`,       label: 'Field' },
     { to: `/projects/${id}/subs`,        label: 'Subs' },
   ]

@@ -11,6 +11,8 @@ import { ProjectsPage } from '@/features/projects/ProjectsPage'
 import { ProjectDetailPage } from '@/features/projects/ProjectDetailPage'
 import { OverviewTab } from '@/features/projects/tabs/OverviewTab'
 import { ScheduleTab } from '@/features/projects/tabs/ScheduleTab'
+import { FinancialsTab } from '@/features/projects/tabs/FinancialsTab'
+import { DocumentsTab } from '@/features/projects/tabs/DocumentsTab'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user } = useAuth()
@@ -40,8 +42,8 @@ function AuthRoutes() {
           <Route index                element={<Navigate to="overview" replace />} />
           <Route path="overview"      element={<OverviewTab />} />
           <Route path="schedule"      element={<ScheduleTab />} />
-          <Route path="financials"    element={<ComingSoon name="Financials" />} />
-          <Route path="documents"     element={<ComingSoon name="Documents" />} />
+          <Route path="financials"    element={<FinancialsTab />} />
+          <Route path="documents"     element={<DocumentsTab />} />
           <Route path="field"         element={<ComingSoon name="Field" />} />
           <Route path="subs"          element={<ComingSoon name="Subcontractors" />} />
         </Route>
