@@ -66,13 +66,15 @@ export interface Tenant {
 export interface Account {
   id: string
   tenant_id: string
-  account_number: string
-  name: string
-  type: string
-  subtype: string | null
+  account_number: number
+  account_name: string
+  account_type: string
+  account_subtype: string
+  normal_balance: string
+  description: string
   is_active: boolean
+  parent_account_number: number | null
   created_at: string
-  updated_at: string
 }
 
 /** BB — Client contacts. Indigo adds portal_user_id + stripe_customer_id via migration 001 */
@@ -390,14 +392,15 @@ export interface NotificationTemplate {
 }
 
 export interface AuditLog {
-  id: string
-  tenant_id: string
+  id: number   // bigint sequence, not uuid
+  tenant_id: string | null
   user_id: string | null
   table_name: string
   record_id: string
   action: string
   old_values: Json | null
   new_values: Json | null
+  ip_address: string | null
   created_at: string
 }
 
@@ -654,31 +657,32 @@ export interface Budget {
   tenant_id: string
   job_id: string
   estimate_id: string | null
-  created_by: string | null
   name: string
   status: BudgetStatus
   total_budgeted_cents: number
-  total_actual_cents: number
   total_committed_cents: number
-  variance_cents: number
-  locked_at: string | null
+  total_actual_cents: number
+  notes: string | null
+  created_by: string | null
   created_at: string
   updated_at: string
 }
 
 export interface BudgetLineItem {
   id: string
-  tenant_id: string
   budget_id: string
-  job_id: string
   estimate_line_item_id: string | null
+  tenant_id: string
+  job_id: string
   account_id: string | null
   description: string
+  csi_division: string | null
+  trade: string | null
   budgeted_cents: number
-  actual_cents: number
   committed_cents: number
-  variance_cents: number
-  sort_order: number
+  actual_cost_cents: number
+  billed_to_client_cents: number
+  sequence: number
   created_at: string
   updated_at: string
 }
@@ -980,14 +984,14 @@ export interface AiConversation {
   job_id: string | null
   project_id: string | null
   user_id: string | null
-  provider: string
+  context_type: string
+  /** Full message history as JSONB array */
+  messages: Json
   model: string
-  task_type: string
-  input_tokens: number
-  output_tokens: number
-  duration_ms: number
-  content_type: string | null
+  input_tokens: number | null
+  output_tokens: number | null
   created_at: string
+  updated_at: string
 }
 
 export interface AiInsight {
@@ -999,10 +1003,12 @@ export interface AiInsight {
   severity: InsightSeverity
   title: string
   body: string
-  recommended_action: string | null
-  resolved_at: string | null
+  data: Json
+  suggested_action: string | null
   acknowledged_at: string | null
   acknowledged_by: string | null
+  resolved_at: string | null
+  expires_at: string | null
   created_at: string
 }
 
@@ -1011,11 +1017,15 @@ export interface AiGeneratedContent {
   tenant_id: string
   job_id: string | null
   project_id: string | null
-  conversation_id: string | null
   user_id: string | null
   content_type: string
-  content: string
-  metadata: Json | null
+  source_record_id: string | null
+  prompt_version: string | null
+  ai_draft: string
+  final_content: string | null
+  was_edited: boolean | null
+  was_used: boolean | null
+  conversation_id: string | null
   created_at: string
 }
 
@@ -1034,11 +1044,11 @@ export interface AiJobRun {
   tenant_id: string
   job_name: string
   status: string
+  projects_scanned: number | null
+  insights_generated: number | null
+  error_message: string | null
   started_at: string
   completed_at: string | null
-  error: string | null
-  insights_generated: number
-  metadata: Json | null
 }
 
 // ---------------------------------------------------------------------------
@@ -1106,7 +1116,7 @@ export interface Database {
       gps_checkins:               { Row: GpsCheckin;           Insert: Omit<GpsCheckin, 'id'>;                                         Update: Partial<Omit<GpsCheckin, 'id'>> }
       punch_list_items:           { Row: PunchListItem;        Insert: Omit<PunchListItem, 'id' | 'created_at' | 'updated_at'>;        Update: Partial<Omit<PunchListItem, 'id'>> }
       warranty_claims:            { Row: WarrantyClaim;        Insert: Omit<WarrantyClaim, 'id' | 'created_at' | 'updated_at'>;        Update: Partial<Omit<WarrantyClaim, 'id'>> }
-      ai_conversations:           { Row: AiConversation;       Insert: Omit<AiConversation, 'id' | 'created_at'>;                      Update: never }
+      ai_conversations:           { Row: AiConversation;       Insert: Omit<AiConversation, 'id' | 'created_at' | 'updated_at'>;      Update: Partial<Omit<AiConversation, 'id'>> }
       ai_insights:                { Row: AiInsight;            Insert: Omit<AiInsight, 'id' | 'created_at'>;                           Update: Partial<Omit<AiInsight, 'id'>> }
       ai_generated_content:       { Row: AiGeneratedContent;   Insert: Omit<AiGeneratedContent, 'id' | 'created_at'>;                  Update: never }
       document_embeddings:        { Row: DocumentEmbedding;    Insert: Omit<DocumentEmbedding, 'id' | 'created_at'>;                   Update: never }
