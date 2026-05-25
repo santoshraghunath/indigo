@@ -120,21 +120,41 @@ export interface Job {
   id: string
   tenant_id: string
   job_number: string
-  name: string
-  description: string | null
-  customer_id: string | null
-  project_type: string | null
+  job_name: string
+  customer_id: string
   status: string
-  contract_amount: number | null
+  job_type: string
   start_date: string | null
   end_date: string | null
-  address: string | null
+  contract_amount_cents: number
+  description: string
+  job_address: string
+  notes: string
+  created_at: string
+  updated_at: string
+  // Indigo-extended columns (added by Indigo migrations)
+  project_type: string | null
+  address_line1: string | null
+  address_line2: string | null
   city: string | null
   state: string | null
   zip: string | null
+  apn: string | null
+  target_completion: string | null
+  actual_completion: string | null
+  contract_value_cents: number | null
+  current_contract_cents: number | null
+  permit_number: string | null
+  permit_issued_date: string | null
+  permit_expiry_date: string | null
+  has_construction_loan: boolean
+  lender_name: string | null
+  loan_amount_cents: number | null
+  pm_user_id: string | null
+  superintendent_user_id: string | null
+  package_name: string | null
   tags: string[]
-  created_at: string
-  updated_at: string
+  internal_notes: string | null
 }
 
 /** BB — Change orders. Indigo adds change_order_line_items FKing here */
@@ -377,10 +397,10 @@ export interface TenantMember {
   user_id: string
   role: MemberRole
   is_active: boolean
+  invited_by: string | null
   invited_at: string | null
-  joined_at: string | null
+  accepted_at: string | null
   created_at: string
-  updated_at: string
 }
 
 export interface NotificationTemplate {
@@ -407,24 +427,15 @@ export interface AuditLog {
   created_at: string
 }
 
-/** 1:1 extension of BB jobs table */
+/**
+ * Thin join record linking an Indigo project to a BB job.
+ * All display data (name, type, dates, PM, address) lives on the Job row.
+ */
 export interface Project {
   id: string
   tenant_id: string
   job_id: string
-  name: string
-  description: string | null
-  project_type: 'custom' | 'express' | null
-  status: string
-  pm_user_id: string | null
-  super_user_id: string | null
-  start_date: string | null
-  target_completion: string | null
-  actual_completion: string | null
-  address: string | null
-  city: string | null
-  state: string | null
-  zip: string | null
+  created_by: string | null
   created_at: string
   updated_at: string
 }
@@ -439,51 +450,65 @@ export interface ProjectMember {
 
 export interface ProjectPhase {
   id: string
-  tenant_id: string
   project_id: string
+  tenant_id: string
   name: string
-  description: string | null
-  status: PhaseStatus
-  sort_order: number
+  sequence: number
   start_date: string | null
   end_date: string | null
+  status: PhaseStatus
+  color: string | null
+  description: string | null
   created_at: string
   updated_at: string
 }
 
 export interface Milestone {
   id: string
-  tenant_id: string
   project_id: string
+  tenant_id: string
   phase_id: string | null
   name: string
   description: string | null
   due_date: string | null
-  completed_at: string | null
-  amount_cents: number | null
+  completed_date: string | null
+  status: string   // USER-DEFINED — likely phase_status values
+  sequence: number
+  is_client_visible: boolean
   requires_client_approval: boolean
   client_approved_at: string | null
   client_approved_by: string | null
+  triggers_draw_request: boolean
+  triggers_invoice: boolean
+  linked_draw_id: string | null
+  linked_invoice_id: string | null
   created_at: string
   updated_at: string
 }
 
 export interface ScheduleItem {
   id: string
-  tenant_id: string
   project_id: string
+  tenant_id: string
   phase_id: string | null
-  parent_id: string | null
+  milestone_id: string | null
   type: ScheduleItemType
   name: string
-  start_date: string | null
-  end_date: string | null
+  description: string | null
+  planned_start: string | null
+  planned_end: string | null
+  actual_start: string | null
+  actual_end: string | null
   duration_days: number | null
-  percent_complete: number
   assigned_to: string | null
-  trade: string | null
-  notes: string | null
-  is_critical_path: boolean
+  assigned_trade: string | null
+  subcontractor_id: string | null
+  status: string   // USER-DEFINED — schedule item status enum
+  percent_complete: number
+  sequence: number
+  indent_level: number
+  is_collapsed: boolean
+  color: string | null
   created_at: string
   updated_at: string
 }
@@ -1082,9 +1107,9 @@ export interface Database {
       settings:                   { Row: Setting;              Insert: Omit<Setting, 'id' | 'created_at' | 'updated_at'>;              Update: Partial<Omit<Setting, 'id'>> }
       // Indigo tables
       user_profiles:              { Row: UserProfile;          Insert: Omit<UserProfile, 'created_at' | 'updated_at'>;                 Update: Partial<Omit<UserProfile, 'id'>> }
-      tenant_members:             { Row: TenantMember;         Insert: Omit<TenantMember, 'id' | 'created_at' | 'updated_at'>;         Update: Partial<Omit<TenantMember, 'id'>> }
+      tenant_members:             { Row: TenantMember;         Insert: Omit<TenantMember, 'id' | 'created_at'>;                        Update: Partial<Omit<TenantMember, 'id'>> }
       audit_log:                  { Row: AuditLog;             Insert: Omit<AuditLog, 'id' | 'created_at'>;                            Update: never }
-      projects:                   { Row: Project;              Insert: Omit<Project, 'id' | 'created_at' | 'updated_at'>;              Update: Partial<Omit<Project, 'id'>> }
+      projects:                   { Row: Project;              Insert: Omit<Project, 'id' | 'created_at' | 'updated_at'>;              Update: never }
       project_members:            { Row: ProjectMember;        Insert: Omit<ProjectMember, 'id' | 'created_at'>;                       Update: never }
       project_phases:             { Row: ProjectPhase;         Insert: Omit<ProjectPhase, 'id' | 'created_at' | 'updated_at'>;         Update: Partial<Omit<ProjectPhase, 'id'>> }
       milestones:                 { Row: Milestone;            Insert: Omit<Milestone, 'id' | 'created_at' | 'updated_at'>;            Update: Partial<Omit<Milestone, 'id'>> }

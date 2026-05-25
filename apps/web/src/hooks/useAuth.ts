@@ -35,7 +35,7 @@ export function useAuthListener() {
 
     const { data: memberships } = await supabase
       .from('tenant_members')
-      .select('*, tenant:tenants(id, name, slug, logo_url, created_at, updated_at)')
+      .select('id, tenant_id, user_id, role, is_active, invited_by, invited_at, accepted_at, created_at, tenant:tenants(id, name, slug, logo_url, created_at, updated_at)')
       .eq('user_id', userId)
       .eq('is_active', true)
 
