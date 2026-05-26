@@ -1008,6 +1008,103 @@ export async function withdrawChangeOrder(
   if (error) throw error
 }
 
+// ── Daily log mutations ────────────────────────────────────────────────────
+
+export interface CreateDailyLogInput {
+  date: string
+  weather?: string | null
+  temperature_f?: number | null
+  crew_count?: number | null
+  hours_worked?: number | null
+  work_performed: string
+  materials_delivered?: string | null
+  equipment_used?: string | null
+  issues_or_delays?: string | null
+  is_client_visible?: boolean
+  publish?: boolean
+}
+
+export async function createDailyLog(
+  client: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  userId: string,
+  input: CreateDailyLogInput,
+): Promise<{ id: string }> {
+  const { data, error } = await client
+    .from('daily_logs')
+    .insert({
+      tenant_id:           tenantId,
+      project_id:          projectId,
+      created_by_user_id:  userId,
+      date:                input.date,
+      weather:             input.weather              ?? null,
+      temperature_f:       input.temperature_f        ?? null,
+      crew_count:          input.crew_count           ?? null,
+      hours_worked:        input.hours_worked         ?? null,
+      work_performed:      input.work_performed,
+      materials_delivered: input.materials_delivered  ?? null,
+      equipment_used:      input.equipment_used       ?? null,
+      issues_or_delays:    input.issues_or_delays     ?? null,
+      is_client_visible:   input.is_client_visible    ?? false,
+      published_at:        input.publish ? new Date().toISOString() : null,
+    } as unknown as never)
+    .select('id')
+    .single()
+  if (error) throw error
+  return data as { id: string }
+}
+
+export interface UpdateDailyLogInput {
+  date?: string
+  weather?: string | null
+  temperature_f?: number | null
+  crew_count?: number | null
+  hours_worked?: number | null
+  work_performed?: string
+  materials_delivered?: string | null
+  equipment_used?: string | null
+  issues_or_delays?: string | null
+  is_client_visible?: boolean
+}
+
+export async function updateDailyLog(
+  client: SupabaseClient,
+  logId: string,
+  input: UpdateDailyLogInput,
+): Promise<void> {
+  const { error } = await client
+    .from('daily_logs')
+    .update({ ...input } as unknown as never)
+    .eq('id', logId)
+  if (error) throw error
+}
+
+/** Stamps published_at = now() and optionally marks is_client_visible. */
+export async function publishDailyLog(
+  client: SupabaseClient,
+  logId: string,
+): Promise<void> {
+  const { error } = await client
+    .from('daily_logs')
+    .update({ published_at: new Date().toISOString() } as unknown as never)
+    .eq('id', logId)
+  if (error) throw error
+}
+
+/** Toggles the client-visible flag on a daily log. */
+export async function setDailyLogClientVisible(
+  client: SupabaseClient,
+  logId: string,
+  isVisible: boolean,
+): Promise<void> {
+  const { error } = await client
+    .from('daily_logs')
+    .update({ is_client_visible: isVisible } as unknown as never)
+    .eq('id', logId)
+  if (error) throw error
+}
+
 // ── Draw schedule mutations ────────────────────────────────────────────────
 
 export interface CreateDrawScheduleInput {
