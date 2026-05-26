@@ -1248,7 +1248,7 @@ export async function createDailyLog(
     .insert({
       tenant_id:           tenantId,
       project_id:          projectId,
-      created_by_user_id:  userId,
+      author_id:           userId,
       date:                input.date,
       weather:             input.weather              ?? null,
       temperature_f:       input.temperature_f        ?? null,
