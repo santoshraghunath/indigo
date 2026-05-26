@@ -215,7 +215,7 @@ function logToForm(log: ProjectDailyLog): DailyLogFormValues {
 interface DailyLogModalProps {
   mode: 'create' | 'edit'
   log?: ProjectDailyLog
-  onSubmit: (values: DailyLogFormValues) => void
+  onSubmit: (values: DailyLogFormValues, stagedPhotos: File[]) => void
   onClose: () => void
   isLoading: boolean
 }
@@ -224,9 +224,35 @@ function DailyLogModal({ mode, log, onSubmit, onClose, isLoading }: DailyLogModa
   const [form, setForm] = useState<DailyLogFormValues>(() =>
     mode === 'edit' && log ? logToForm(log) : emptyForm(),
   )
+  const [stagedPhotos, setStagedPhotos] = useState<File[]>([])
+  const [previews, setPreviews] = useState<string[]>([])
+  const photoInputRef = useRef<HTMLInputElement>(null)
+
+  // Revoke object URLs when they're removed or modal unmounts
+  useEffect(() => {
+    return () => previews.forEach((url) => URL.revokeObjectURL(url))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = <K extends keyof DailyLogFormValues>(key: K, value: DailyLogFormValues[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
+
+  function addFiles(files: FileList | null) {
+    if (!files) return
+    const valid = Array.from(files).filter(
+      (f) => f.type.startsWith('image/') && f.size <= MAX_FILE_SIZE_MB * 1024 * 1024,
+    )
+    if (valid.length === 0) return
+    const newPreviews = valid.map((f) => URL.createObjectURL(f))
+    setStagedPhotos((prev) => [...prev, ...valid])
+    setPreviews((prev) => [...prev, ...newPreviews])
+    if (photoInputRef.current) photoInputRef.current.value = ''
+  }
+
+  function removeStaged(idx: number) {
+    URL.revokeObjectURL(previews[idx])
+    setStagedPhotos((prev) => prev.filter((_, i) => i !== idx))
+    setPreviews((prev) => prev.filter((_, i) => i !== idx))
+  }
 
   const isPublished = mode === 'edit' && !!log?.published_at
 
@@ -354,6 +380,67 @@ function DailyLogModal({ mode, log, onSubmit, onClose, isLoading }: DailyLogModa
             />
           </div>
 
+          {/* Photos */}
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="text-xs font-medium text-gray-700">
+                Photos{stagedPhotos.length > 0 ? ` (${stagedPhotos.length} staged)` : ''}
+              </label>
+              <button
+                type="button"
+                onClick={() => photoInputRef.current?.click()}
+                className="flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-200"
+              >
+                <PlusIcon className="h-3 w-3" /> Add
+              </button>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(e) => addFiles(e.target.files)}
+              />
+            </div>
+
+            {previews.length > 0 ? (
+              <div className="grid grid-cols-4 gap-2">
+                {previews.map((url, i) => (
+                  <div key={i} className="group relative aspect-square">
+                    <img
+                      src={url}
+                      alt={`Photo ${i + 1}`}
+                      className="h-full w-full rounded-lg object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeStaged(i)}
+                      className="absolute right-0.5 top-0.5 hidden rounded-full bg-black/60 p-0.5 text-[10px] text-white hover:bg-red-600 group-hover:block"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  className="aspect-square rounded-lg border-2 border-dashed border-gray-200 text-gray-400 hover:border-brand-300 hover:text-brand-500 transition-colors flex items-center justify-center"
+                >
+                  <PlusIcon className="h-5 w-5" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => photoInputRef.current?.click()}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg border-2 border-dashed border-gray-200 py-5 text-xs text-gray-400 hover:border-brand-300 hover:text-brand-500 transition-colors"
+              >
+                <PlusIcon className="h-4 w-4" />
+                Add site photos (optional)
+              </button>
+            )}
+          </div>
+
           {/* Toggles */}
           <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 space-y-3">
             <div className="flex items-center justify-between">
@@ -400,10 +487,15 @@ function DailyLogModal({ mode, log, onSubmit, onClose, isLoading }: DailyLogModa
           <button
             type="button"
             disabled={!form.work_performed.trim() || !form.date || isLoading}
-            onClick={() => onSubmit(form)}
+            onClick={() => onSubmit(form, stagedPhotos)}
             className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
           >
-            {isLoading ? 'Saving…' : mode === 'create' ? 'Create Log' : 'Save Changes'}
+            {isLoading
+              ? 'Saving…'
+              : mode === 'create'
+                ? stagedPhotos.length > 0 ? `Create Log + ${stagedPhotos.length} Photo${stagedPhotos.length > 1 ? 's' : ''}` : 'Create Log'
+                : stagedPhotos.length > 0 ? `Save + ${stagedPhotos.length} Photo${stagedPhotos.length > 1 ? 's' : ''}` : 'Save Changes'
+            }
           </button>
         </div>
       </div>
@@ -701,8 +793,8 @@ function DailyLogsSection({ logs, projectId, tenantId, userId }: DailyLogsSectio
   const invalidate = () => qc.invalidateQueries({ queryKey: ['project-field', projectId] })
 
   const createMut = useMutation({
-    mutationFn: (vals: DailyLogFormValues) =>
-      createDailyLog(supabase, tenantId, projectId, userId, {
+    mutationFn: async ({ vals, photos }: { vals: DailyLogFormValues; photos: File[] }) => {
+      const { id: logId } = await createDailyLog(supabase, tenantId, projectId, userId, {
         date: vals.date,
         weather: vals.weather || null,
         temperature_f: vals.temperature_f ? Number(vals.temperature_f) : null,
@@ -714,14 +806,20 @@ function DailyLogsSection({ logs, projectId, tenantId, userId }: DailyLogsSectio
         issues_or_delays: vals.issues_or_delays || null,
         is_client_visible: vals.is_client_visible,
         publish: vals.publish,
-      } satisfies CreateDailyLogInput),
+      } satisfies CreateDailyLogInput)
+      if (photos.length > 0) {
+        await Promise.all(
+          photos.map((f) => uploadDailyLogPhoto(supabase, tenantId, projectId, logId, userId, f)),
+        )
+      }
+    },
     onSuccess: () => { invalidate(); setModal(null); toast.success('Daily log created') },
     onError: (e: Error) => toast.error(e.message),
   })
 
   const editMut = useMutation({
-    mutationFn: ({ logId, vals }: { logId: string; vals: DailyLogFormValues }) =>
-      updateDailyLog(supabase, logId, {
+    mutationFn: async ({ logId, vals, photos }: { logId: string; vals: DailyLogFormValues; photos: File[] }) => {
+      await updateDailyLog(supabase, logId, {
         date: vals.date,
         weather: vals.weather || null,
         temperature_f: vals.temperature_f ? Number(vals.temperature_f) : null,
@@ -732,7 +830,15 @@ function DailyLogsSection({ logs, projectId, tenantId, userId }: DailyLogsSectio
         equipment_used: vals.equipment_used || null,
         issues_or_delays: vals.issues_or_delays || null,
         is_client_visible: vals.is_client_visible,
-      } satisfies UpdateDailyLogInput),
+      } satisfies UpdateDailyLogInput)
+      if (photos.length > 0) {
+        await Promise.all(
+          photos.map((f) => uploadDailyLogPhoto(supabase, tenantId, projectId, logId, userId, f)),
+        )
+        // Invalidate the photo gallery for this log so it refreshes on re-expand
+        qc.invalidateQueries({ queryKey: ['log-photos', logId] })
+      }
+    },
     onSuccess: () => { invalidate(); setModal(null); toast.success('Log updated') },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -886,7 +992,7 @@ function DailyLogsSection({ logs, projectId, tenantId, userId }: DailyLogsSectio
       {modal?.type === 'create' && (
         <DailyLogModal
           mode="create"
-          onSubmit={(vals) => createMut.mutate(vals)}
+          onSubmit={(vals, photos) => createMut.mutate({ vals, photos })}
           onClose={() => setModal(null)}
           isLoading={isBusy}
         />
@@ -895,7 +1001,7 @@ function DailyLogsSection({ logs, projectId, tenantId, userId }: DailyLogsSectio
         <DailyLogModal
           mode="edit"
           log={modal.log}
-          onSubmit={(vals) => editMut.mutate({ logId: modal.log.id, vals })}
+          onSubmit={(vals, photos) => editMut.mutate({ logId: modal.log.id, vals, photos })}
           onClose={() => setModal(null)}
           isLoading={isBusy}
         />
