@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createProject, getCustomers } from '@indigo/shared'
+import { createProject, getCustomers, setProjectLocation } from '@indigo/shared'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/stores/toastStore'
 import { XMarkIcon } from '@/components/ui/Icons'
+import { AddressAutocomplete, type AddressResult } from '@/components/ui/AddressAutocomplete'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -86,6 +87,9 @@ export function CreateProjectModal({ onClose }: Props) {
   const [city,              setCity]              = useState('')
   const [state,             setState]             = useState('CA')
   const [zip,               setZip]               = useState('')
+  // Lat/lng captured from Google Places autocomplete — used to auto-pin geofence
+  const [siteLat,           setSiteLat]           = useState<number | null>(null)
+  const [siteLng,           setSiteLng]           = useState<number | null>(null)
   const [startDate,         setStartDate]         = useState('')
   const [targetCompletion,  setTargetCompletion]  = useState('')
   const [contractValueStr,  setContractValueStr]  = useState('')
@@ -101,8 +105,8 @@ export function CreateProjectModal({ onClose }: Props) {
 
   // ── Mutation ─────────────────────────────────────────────────────────────
   const mutation = useMutation({
-    mutationFn: () =>
-      createProject(supabase, activeTenantId!, user!.id, {
+    mutationFn: async () => {
+      const result = await createProject(supabase, activeTenantId!, user!.id, {
         job_name:              jobName.trim(),
         job_number:            jobNumber.trim(),
         customer_id:           customerId,
@@ -117,7 +121,13 @@ export function CreateProjectModal({ onClose }: Props) {
         contract_value_cents:  contractValueStr
           ? Math.round(parseFloat(contractValueStr) * 100)
           : undefined,
-      }),
+      })
+      // Auto-pin geofence when lat/lng was captured from address autocomplete
+      if (siteLat !== null && siteLng !== null) {
+        await setProjectLocation(supabase, result.projectId, siteLat, siteLng, null)
+      }
+      return result
+    },
     onSuccess: ({ projectId }) => {
       void queryClient.invalidateQueries({ queryKey: ['projects', activeTenantId] })
       toast.success('Project created', `${jobName.trim()} is ready.`)
@@ -271,13 +281,32 @@ export function CreateProjectModal({ onClose }: Props) {
               </p>
               <div className="space-y-4">
                 <Field label="Address">
-                  <input
-                    type="text"
-                    value={addressLine1}
-                    onChange={(e) => setAddressLine1(e.target.value)}
-                    placeholder="123 Main St"
-                    className={inputCls()}
-                  />
+                  <div className="relative">
+                    <AddressAutocomplete
+                      value={addressLine1}
+                      onChange={(v) => {
+                        setAddressLine1(v)
+                        // Clear coords when the user edits the field manually
+                        setSiteLat(null)
+                        setSiteLng(null)
+                      }}
+                      onSelect={(r: AddressResult) => {
+                        setAddressLine1(r.line1)
+                        if (r.city)  setCity(r.city)
+                        if (r.state) setState(r.state)
+                        if (r.zip)   setZip(r.zip)
+                        setSiteLat(r.lat)
+                        setSiteLng(r.lng)
+                      }}
+                      placeholder="Start typing to search address…"
+                      className={inputCls()}
+                    />
+                    {siteLat !== null && (
+                      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-green-600 font-medium">
+                        📍 pinned
+                      </span>
+                    )}
+                  </div>
                 </Field>
 
                 <div className="grid grid-cols-6 gap-3">
@@ -316,6 +345,12 @@ export function CreateProjectModal({ onClose }: Props) {
                     </Field>
                   </div>
                 </div>
+
+                {siteLat !== null && (
+                  <p className="text-xs text-green-700 bg-green-50 rounded-lg px-3 py-2">
+                    ✓ Geofence will be pinned to this address automatically when the project is created.
+                  </p>
+                )}
               </div>
             </section>
 

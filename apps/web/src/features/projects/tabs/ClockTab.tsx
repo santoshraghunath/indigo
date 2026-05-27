@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useOutletContext, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
@@ -32,6 +32,7 @@ import {
   CurrencyDollarIcon,
 } from '@/components/ui/Icons'
 import { useGeolocation, haversineMeters } from '@/hooks/useGeolocation'
+import { geocodeAddress } from '@/lib/geocode'
 
 interface OutletCtx {
   project: ProjectRow | undefined
@@ -231,6 +232,27 @@ export function ClockTab() {
     staleTime: 300_000,
   })
 
+  // Job address (PM+ only) — used for "Use project address" geofence pinning
+  const { data: jobAddress } = useQuery({
+    queryKey: ['job-address', project?.job_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('address_line1, city, state, zip')
+        .eq('id', project!.job_id)
+        .single()
+      if (error) throw error
+      return data as { address_line1: string | null; city: string | null; state: string | null; zip: string | null }
+    },
+    enabled: !!project?.job_id && isPmOrAbove(role),
+    staleTime: 300_000,
+  })
+
+  // Geocoding state for "Use project address"
+  const [geocoding,   setGeocoding]   = useState(false)
+  const [geocodeErr,  setGeocodeErr]  = useState<string | null>(null)
+  const geocodingRef = useRef(false)
+
   // ── Derived ──────────────────────────────────────────────────────────────
 
   const siteLat = siteData?.site_lat ?? null
@@ -336,16 +358,52 @@ export function ClockTab() {
   // ── PM: Set location ──────────────────────────────────────────────────────
 
   const setLocationMut = useMutation({
-    mutationFn: (radiusOverride: number | null) => {
-      if (!geo.lat || !geo.lng) throw new Error('No GPS fix')
-      return setProjectLocation(supabase, projectId!, geo.lat, geo.lng, radiusOverride)
-    },
+    mutationFn: ({ lat, lng, radius }: { lat: number; lng: number; radius: number | null }) =>
+      setProjectLocation(supabase, projectId!, lat, lng, radius),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['project-site', projectId] })
       toast.success('Site location saved.')
     },
     onError: () => toast.error('Failed to save location.'),
   })
+
+  // Handler: geocode the project's stored address and pin it as the geofence
+  async function handleUseProjectAddress() {
+    const parts = [
+      jobAddress?.address_line1,
+      jobAddress?.city,
+      jobAddress?.state,
+      jobAddress?.zip,
+    ].filter(Boolean)
+
+    if (parts.length === 0) {
+      toast.error('No address on file', 'Add an address to the project first.')
+      return
+    }
+
+    if (geocodingRef.current) return
+    geocodingRef.current = true
+    setGeocoding(true)
+    setGeocodeErr(null)
+
+    try {
+      const coords = await geocodeAddress(parts.join(', '))
+      if (!coords) {
+        setGeocodeErr('Could not locate address — check that VITE_GOOGLE_MAPS_API_KEY is set.')
+        return
+      }
+      setLocationMut.mutate({
+        lat:    coords.lat,
+        lng:    coords.lng,
+        radius: siteData?.geofence_radius_meters ?? null,
+      })
+    } catch {
+      setGeocodeErr('Geocoding failed. Try again.')
+    } finally {
+      geocodingRef.current = false
+      setGeocoding(false)
+    }
+  }
 
   // ── PM: Radius override ───────────────────────────────────────────────────
   const [radiusInput, setRadiusInput] = useState<string>('')
@@ -648,26 +706,49 @@ export function ClockTab() {
             </h3>
 
             {/* Current pin status */}
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-gray-900">Site Pin</p>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {siteLat != null
                     ? `${siteLat.toFixed(5)}, ${siteLng?.toFixed(5)}`
                     : 'Not set — geofencing disabled'}
                 </p>
+                {geocodeErr && (
+                  <p className="mt-1 text-xs text-red-600">{geocodeErr}</p>
+                )}
               </div>
-              <button
-                onClick={() => setLocationMut.mutate(siteData?.geofence_radius_meters ?? null)}
-                disabled={setLocationMut.isPending || !geo.lat}
-                className="rounded-lg border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100 disabled:opacity-40 transition-colors"
-              >
-                {setLocationMut.isPending
-                  ? 'Saving…'
-                  : siteLat != null
-                    ? 'Update to my location'
-                    : 'Set to my location'}
-              </button>
+              <div className="flex shrink-0 flex-col items-end gap-1.5">
+                {/* Use GPS location */}
+                <button
+                  onClick={() => {
+                    if (!geo.lat || !geo.lng) { toast.error('No GPS fix yet.'); return }
+                    setLocationMut.mutate({
+                      lat:    geo.lat,
+                      lng:    geo.lng,
+                      radius: siteData?.geofence_radius_meters ?? null,
+                    })
+                  }}
+                  disabled={setLocationMut.isPending || geocoding || !geo.lat}
+                  className="rounded-lg border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100 disabled:opacity-40 transition-colors"
+                >
+                  {setLocationMut.isPending && !geocoding
+                    ? 'Saving…'
+                    : siteLat != null
+                      ? 'Update to my location'
+                      : 'Set to my location'}
+                </button>
+                {/* Use project address (geocode) */}
+                {jobAddress && (
+                  <button
+                    onClick={() => void handleUseProjectAddress()}
+                    disabled={setLocationMut.isPending || geocoding}
+                    className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40 transition-colors"
+                  >
+                    {geocoding ? 'Locating…' : 'Use project address'}
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Per-project radius */}
