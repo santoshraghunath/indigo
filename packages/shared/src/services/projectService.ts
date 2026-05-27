@@ -402,6 +402,7 @@ export async function getInvoiceTriggerMilestones(
     `)
     .eq('project_id', projectId)
     .eq('triggers_invoice', true)
+    .order('due_date', { ascending: true, nullsFirst: false })
     .order('sequence', { ascending: true })
 
   if (error) throw error
