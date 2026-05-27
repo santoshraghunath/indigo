@@ -33,6 +33,12 @@ function PortalAccessCard({ customer }: { customer: JobCustomer }) {
 
   const isLinked = !!customer.portal_user_id
 
+  // Use the configured app URL so the link works regardless of where the
+  // PM's browser is running (localhost in dev would produce a broken link
+  // for the client). VITE_APP_URL must be set to the deployed domain.
+  const appUrl = (import.meta.env.VITE_APP_URL as string | undefined)?.replace(/\/$/, '')
+    ?? window.location.origin
+
   async function sendInvite() {
     setSending(true)
     setErr(null)
@@ -40,7 +46,7 @@ function PortalAccessCard({ customer }: { customer: JobCustomer }) {
       email: customer.email,
       options: {
         shouldCreateUser: true,
-        emailRedirectTo:  `${window.location.origin}/portal`,
+        emailRedirectTo:  `${appUrl}/portal`,
       },
     })
     if (error) {
@@ -95,9 +101,9 @@ function PortalAccessCard({ customer }: { customer: JobCustomer }) {
 
       <div className="mt-4 rounded-lg bg-gray-50 px-4 py-3 text-xs text-gray-500">
         <span className="font-medium text-gray-700">Portal URL: </span>
-        <span className="font-mono">{window.location.origin}/portal</span>
+        <span className="font-mono">{appUrl}/portal</span>
         <button
-          onClick={() => navigator.clipboard.writeText(`${window.location.origin}/portal`)}
+          onClick={() => navigator.clipboard.writeText(`${appUrl}/portal`)}
           className="ml-2 text-brand-600 hover:text-brand-700 transition-colors"
         >
           Copy

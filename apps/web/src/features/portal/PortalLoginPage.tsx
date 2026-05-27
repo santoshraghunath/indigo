@@ -13,11 +13,14 @@ export function PortalLoginPage() {
     setError(null)
     setLoading(true)
 
+    const appUrl = (import.meta.env.VITE_APP_URL as string | undefined)?.replace(/\/$/, '')
+      ?? window.location.origin
+
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
         shouldCreateUser: true,
-        emailRedirectTo: `${window.location.origin}/portal`,
+        emailRedirectTo: `${appUrl}/portal`,
       },
     })
 
