@@ -28,6 +28,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/documents',      label: 'Documents',       Icon: DocumentIcon },
   { to: '/field',          label: 'Field',           Icon: ClipboardIcon },
   { to: '/subcontractors', label: 'Subcontractors',  Icon: UsersIcon },
+  { to: '/employees',      label: 'Employees',        Icon: UsersIcon },
   { to: '/ai',             label: 'AI Assistant',    Icon: SparklesIcon },
 ]
 

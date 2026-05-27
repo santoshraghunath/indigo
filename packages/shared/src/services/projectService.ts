@@ -1923,3 +1923,167 @@ export async function deleteInspection(
 
   if (error) throw error
 }
+
+// ── Employee management ──────────────────────────────────────────────────────
+
+export type EmployeeRole = 'owner' | 'admin' | 'project_manager' | 'field_super' | 'accountant'
+
+export interface TenantEmployee {
+  id:           string   // tenant_members.id
+  user_id:      string
+  role:         EmployeeRole
+  is_active:    boolean
+  created_at:   string
+  profile: {
+    first_name:  string
+    last_name:   string
+    email:       string
+    avatar_url:  string | null
+    title:       string | null
+    phone:       string | null
+  } | null
+  /** Most recent hourly rate in cents, if set. */
+  current_wage_cents: number | null
+}
+
+export interface EmployeeWorkSummary {
+  user_id:              string
+  total_sessions:       number
+  total_net_hours:      number
+  total_regular_hours:  number
+  total_ot_1_5_hours:   number
+  total_ot_2_0_hours:   number
+  total_labor_cents:    number
+  last_session_at:      string | null
+}
+
+/**
+ * Returns all tenant members who are employees (not subcontractor / client),
+ * joined with their user_profiles. Newest member first.
+ */
+export async function getTenantEmployees(
+  client: SupabaseClient,
+  tenantId: string,
+): Promise<TenantEmployee[]> {
+  const { data, error } = await client
+    .from('tenant_members')
+    .select(`
+      id,
+      user_id,
+      role,
+      is_active,
+      created_at,
+      profile:user_profiles ( first_name, last_name, email, avatar_url, title, phone )
+    `)
+    .eq('tenant_id', tenantId)
+    .not('role', 'in', '("subcontractor","client")')
+    .order('created_at', { ascending: false })
+
+  if (error) throw error
+
+  // Fetch latest wages for all employees in one query
+  const userIds = ((data ?? []) as unknown as TenantEmployee[]).map((e) => e.user_id)
+  let wageMap: Record<string, number> = {}
+
+  if (userIds.length > 0) {
+    const { data: wages } = await client
+      .from('employee_wages')
+      .select('user_id, hourly_rate_cents, effective_date')
+      .eq('tenant_id', tenantId)
+      .in('user_id', userIds)
+      .order('effective_date', { ascending: false })
+
+    if (wages) {
+      // Keep only the most recent entry per user (ordered desc, so first win)
+      for (const w of wages as Array<{ user_id: string; hourly_rate_cents: number }>) {
+        if (!(w.user_id in wageMap)) {
+          wageMap[w.user_id] = w.hourly_rate_cents
+        }
+      }
+    }
+  }
+
+  return ((data ?? []) as unknown as TenantEmployee[]).map((e) => ({
+    ...e,
+    current_wage_cents: wageMap[e.user_id] ?? null,
+  }))
+}
+
+/**
+ * Returns aggregated work stats for a single employee across all projects.
+ * Only counts completed / auto_closed sessions.
+ */
+export async function getEmployeeWorkSummary(
+  client: SupabaseClient,
+  tenantId: string,
+  userId: string,
+): Promise<EmployeeWorkSummary> {
+  const { data, error } = await client
+    .from('work_sessions')
+    .select('net_hours, regular_hours, ot_1_5_hours, ot_2_0_hours, labor_cost_cents, clocked_in_at')
+    .eq('tenant_id', tenantId)
+    .eq('user_id', userId)
+    .in('status', ['completed', 'auto_closed'])
+
+  if (error) throw error
+
+  const rows = (data ?? []) as Array<{
+    net_hours: number | null
+    regular_hours: number | null
+    ot_1_5_hours: number | null
+    ot_2_0_hours: number | null
+    labor_cost_cents: number | null
+    clocked_in_at: string
+  }>
+
+  const sum = rows.reduce(
+    (acc, r) => ({
+      total_sessions:      acc.total_sessions + 1,
+      total_net_hours:     acc.total_net_hours     + (r.net_hours      ?? 0),
+      total_regular_hours: acc.total_regular_hours + (r.regular_hours  ?? 0),
+      total_ot_1_5_hours:  acc.total_ot_1_5_hours  + (r.ot_1_5_hours  ?? 0),
+      total_ot_2_0_hours:  acc.total_ot_2_0_hours  + (r.ot_2_0_hours  ?? 0),
+      total_labor_cents:   acc.total_labor_cents    + (r.labor_cost_cents ?? 0),
+    }),
+    { total_sessions: 0, total_net_hours: 0, total_regular_hours: 0, total_ot_1_5_hours: 0, total_ot_2_0_hours: 0, total_labor_cents: 0 },
+  )
+
+  const sorted = rows.slice().sort((a, b) =>
+    new Date(b.clocked_in_at).getTime() - new Date(a.clocked_in_at).getTime(),
+  )
+
+  return {
+    user_id:             userId,
+    last_session_at:     sorted[0]?.clocked_in_at ?? null,
+    ...sum,
+  }
+}
+
+/**
+ * Returns recent work sessions (all projects) for a single employee.
+ * Joins project info for display.
+ */
+export async function getEmployeeSessions(
+  client: SupabaseClient,
+  tenantId: string,
+  userId: string,
+  limitRows = 50,
+): Promise<WorkSession[]> {
+  const { data, error } = await client
+    .from('work_sessions')
+    .select(`
+      *,
+      project:projects (
+        id,
+        job:jobs ( job_name, job_number )
+      )
+    `)
+    .eq('tenant_id', tenantId)
+    .eq('user_id', userId)
+    .in('status', ['completed', 'auto_closed'])
+    .order('clocked_in_at', { ascending: false })
+    .limit(limitRows)
+
+  if (error) throw error
+  return (data ?? []) as unknown as WorkSession[]
+}
