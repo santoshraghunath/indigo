@@ -81,9 +81,18 @@ function PortalAccessCard({ customer }: { customer: JobCustomer }) {
         </div>
 
         {sent ? (
-          <span className="shrink-0 rounded-lg bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700">
-            Invite sent ✓
-          </span>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className="rounded-lg bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700">
+              Invite sent ✓
+            </span>
+            <button
+              onClick={() => { setSent(false); sendInvite() }}
+              disabled={sending}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 disabled:opacity-50"
+            >
+              Resend
+            </button>
+          </div>
         ) : (
           <button
             onClick={sendInvite}
