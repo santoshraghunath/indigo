@@ -10,27 +10,31 @@ import { createPortal } from 'react-dom'
 // ── Types ──────────────────────────────────────────────────────────────────
 
 export interface AddressResult {
-  line1: string
-  city:  string
-  state: string
-  zip:   string
-  lat:   number
-  lng:   number
+  line1:  string
+  city:   string
+  county: string   // retained — county is useful context for job sites
+  state:  string   // 2-letter code
+  zip:    string
+  lat:    number
+  lng:    number
+  // country is intentionally omitted — always USA for this app
 }
 
-interface PhotonFeature {
-  geometry: { coordinates: [number, number] }
-  properties: {
-    name?:        string
-    housenumber?: string
-    street?:      string
-    city?:        string
-    county?:      string
-    state?:       string
-    postcode?:    string
-    country?:     string
-    type?:        string
-  }
+interface HereAddress {
+  label?:       string
+  houseNumber?: string
+  street?:      string
+  city?:        string
+  county?:      string
+  stateCode?:   string
+  state?:       string
+  postalCode?:  string
+}
+
+interface HereItem {
+  title:    string
+  address:  HereAddress
+  position?: { lat: number; lng: number }
 }
 
 interface DropdownRect {
@@ -48,61 +52,36 @@ interface Props {
   disabled?:    boolean
 }
 
-// ── US state name → abbreviation ───────────────────────────────────────────
+// ── HERE helpers ───────────────────────────────────────────────────────────
 
-const STATE_ABBR: Record<string, string> = {
-  Alabama: 'AL', Alaska: 'AK', Arizona: 'AZ', Arkansas: 'AR', California: 'CA',
-  Colorado: 'CO', Connecticut: 'CT', Delaware: 'DE', Florida: 'FL', Georgia: 'GA',
-  Hawaii: 'HI', Idaho: 'ID', Illinois: 'IL', Indiana: 'IN', Iowa: 'IA',
-  Kansas: 'KS', Kentucky: 'KY', Louisiana: 'LA', Maine: 'ME', Maryland: 'MD',
-  Massachusetts: 'MA', Michigan: 'MI', Minnesota: 'MN', Mississippi: 'MS',
-  Missouri: 'MO', Montana: 'MT', Nebraska: 'NE', Nevada: 'NV',
-  'New Hampshire': 'NH', 'New Jersey': 'NJ', 'New Mexico': 'NM', 'New York': 'NY',
-  'North Carolina': 'NC', 'North Dakota': 'ND', Ohio: 'OH', Oklahoma: 'OK',
-  Oregon: 'OR', Pennsylvania: 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC',
-  'South Dakota': 'SD', Tennessee: 'TN', Texas: 'TX', Utah: 'UT', Vermont: 'VT',
-  Virginia: 'VA', Washington: 'WA', 'West Virginia': 'WV', Wisconsin: 'WI',
-  Wyoming: 'WY', 'District of Columbia': 'DC',
-}
-
-// ── Photon helpers ─────────────────────────────────────────────────────────
-
-// Bounding box roughly covering the continental US + HI + AK
-const US_BBOX = '-179,18,-66,72'
-
-/** Human-readable label shown in the dropdown for a Photon result. */
-function featureLabel(f: PhotonFeature): string {
-  const p = f.properties
-  const street =
-    p.housenumber && p.street
-      ? `${p.housenumber} ${p.street}`
-      : (p.street ?? p.name ?? '')
-  const parts = [street, p.city ?? p.county, p.state, p.postcode]
-    .map((s) => s?.trim())
+/** Two-line label shown in the dropdown — mirrors the GGB Sales Tool. */
+function itemLabel(item: HereItem): { main: string; sub: string } {
+  const a = item.address
+  const main =
+    a.houseNumber && a.street
+      ? `${a.houseNumber} ${a.street}`
+      : (item.title || a.label || '')
+  const sub = [a.city, a.stateCode ?? a.state, a.postalCode]
     .filter(Boolean)
-  return parts.join(', ')
+    .join(', ')
+  return { main, sub }
 }
 
-/** Converts a selected Photon feature into the structured AddressResult. */
-function featureToResult(f: PhotonFeature): AddressResult {
-  const p = f.properties
-  const [lng, lat] = f.geometry.coordinates
-
-  const line1 =
-    p.housenumber && p.street
-      ? `${p.housenumber} ${p.street}`
-      : (p.street ?? p.name ?? '')
-
-  const stateRaw = p.state ?? ''
-  const state    = STATE_ABBR[stateRaw] ?? stateRaw.slice(0, 2).toUpperCase()
-
+/** Converts a selected HERE item into an AddressResult (drops country). */
+function itemToResult(item: HereItem): AddressResult | null {
+  const pos = item.position
+  if (!pos) return null   // position is required for geofencing
+  const a = item.address
   return {
-    line1,
-    city:  p.city ?? p.county ?? '',
-    state,
-    zip:   p.postcode ?? '',
-    lat,
-    lng,
+    line1:  a.houseNumber && a.street
+              ? `${a.houseNumber} ${a.street}`
+              : (item.title || a.label || ''),
+    city:   a.city   ?? '',
+    county: a.county ?? '',
+    state:  a.stateCode ?? a.state ?? '',
+    zip:    a.postalCode ?? '',
+    lat:    pos.lat,
+    lng:    pos.lng,
   }
 }
 
@@ -120,12 +99,14 @@ function useDebounce<T>(value: T, delay: number): T {
 // ── Component ──────────────────────────────────────────────────────────────
 
 /**
- * Address autocomplete input backed by Photon (photon.komoot.io).
- * Free, open-source, no API key required.
+ * Address autocomplete backed by the HERE Discover API.
+ * Returns structured AddressResult (line1, city, county, state, zip, lat, lng).
+ * Country is always USA and is intentionally not included in the result.
  *
- * The dropdown is rendered via a React portal at document.body with
- * position:fixed so it escapes any overflow:hidden/auto ancestors (e.g.
- * scrollable modals).
+ * Dropdown renders via React portal at document.body (position:fixed) so it
+ * escapes overflow:hidden/auto ancestors such as scrollable modals.
+ *
+ * Requires VITE_HERE_API_KEY to be set.
  */
 export function AddressAutocomplete({
   value,
@@ -138,15 +119,15 @@ export function AddressAutocomplete({
   const inputRef           = useRef<HTMLInputElement>(null)
   const ignoreNextFetchRef = useRef(false)
 
-  const [suggestions, setSuggestions] = useState<PhotonFeature[]>([])
+  const [items,       setItems]       = useState<HereItem[]>([])
   const [open,        setOpen]        = useState(false)
   const [loading,     setLoading]     = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
   const [rect,        setRect]        = useState<DropdownRect>({ top: 0, left: 0, width: 0 })
 
-  const debouncedQuery = useDebounce(value, 300)
+  const debouncedQuery = useDebounce(value, 280) // match the 280 ms the GGB tool uses
 
-  // ── Measure input position for portal dropdown ────────────────────────────
+  // ── Measure input for portal positioning ──────────────────────────────────
 
   const measureInput = useCallback(() => {
     if (!inputRef.current) return
@@ -154,19 +135,18 @@ export function AddressAutocomplete({
     setRect({ top: r.bottom + 4, left: r.left, width: r.width })
   }, [])
 
-  // Re-measure whenever the dropdown is open (catches scroll / resize)
   useEffect(() => {
     if (!open) return
     measureInput()
-    window.addEventListener('scroll',  measureInput, true)
-    window.addEventListener('resize',  measureInput)
+    window.addEventListener('scroll', measureInput, true)
+    window.addEventListener('resize', measureInput)
     return () => {
       window.removeEventListener('scroll', measureInput, true)
       window.removeEventListener('resize', measureInput)
     }
   }, [open, measureInput])
 
-  // ── Fetch suggestions ─────────────────────────────────────────────────────
+  // ── Fetch suggestions from HERE Discover ──────────────────────────────────
 
   useEffect(() => {
     if (ignoreNextFetchRef.current) {
@@ -175,28 +155,31 @@ export function AddressAutocomplete({
     }
 
     const q = debouncedQuery.trim()
-    if (q.length < 4) {
-      setSuggestions([])
+    if (q.length < 3) {
+      setItems([])
       setOpen(false)
       return
     }
+
+    const key = import.meta.env.VITE_HERE_API_KEY as string | undefined
+    if (!key) return  // no key → silent no-op (works as plain input)
 
     let cancelled = false
     setLoading(true)
 
     fetch(
-      `https://photon.komoot.io/api/` +
-      `?q=${encodeURIComponent(q)}&limit=6&lang=en&bbox=${US_BBOX}`,
+      `https://discover.search.hereapi.com/v1/discover` +
+      `?q=${encodeURIComponent(q)}&in=countryCode:USA&limit=6&apiKey=${key}`,
     )
       .then((r) => r.json())
-      .then((data: { features?: PhotonFeature[] }) => {
+      .then((data: { items?: HereItem[] }) => {
         if (cancelled) return
-        const features = data.features ?? []
-        setSuggestions(features)
-        setOpen(features.length > 0)
+        const results = (data.items ?? []).filter((i) => !!i.position)
+        setItems(results)
+        setOpen(results.length > 0)
         setActiveIndex(-1)
       })
-      .catch(() => { /* silently ignore network errors */ })
+      .catch(() => { /* network errors → plain input, no crash */ })
       .finally(() => { if (!cancelled) setLoading(false) })
 
     return () => { cancelled = true }
@@ -206,7 +189,6 @@ export function AddressAutocomplete({
 
   useEffect(() => {
     function onPointerDown(e: PointerEvent) {
-      // Close unless the click was on the input itself
       if (inputRef.current && !inputRef.current.contains(e.target as Node)) {
         setOpen(false)
       }
@@ -217,28 +199,29 @@ export function AddressAutocomplete({
 
   // ── Handlers ──────────────────────────────────────────────────────────────
 
-  function handleSelect(feature: PhotonFeature) {
-    const result = featureToResult(feature)
-    ignoreNextFetchRef.current = true // suppress the fetch triggered by onChange
-    onChange(result.line1)
+  function handleSelect(item: HereItem) {
+    const result = itemToResult(item)
+    if (!result) return
+    const { main } = itemLabel(item)
+    ignoreNextFetchRef.current = true
+    onChange(main)
     onSelect(result)
-    setSuggestions([])
+    setItems([])
     setOpen(false)
     setActiveIndex(-1)
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
-    if (!open || suggestions.length === 0) return
-
+    if (!open || items.length === 0) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setActiveIndex((i) => Math.min(i + 1, suggestions.length - 1))
+      setActiveIndex((i) => Math.min(i + 1, items.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setActiveIndex((i) => Math.max(i - 1, 0))
     } else if (e.key === 'Enter' && activeIndex >= 0) {
       e.preventDefault()
-      handleSelect(suggestions[activeIndex])
+      handleSelect(items[activeIndex])
     } else if (e.key === 'Escape') {
       setOpen(false)
     }
@@ -247,7 +230,7 @@ export function AddressAutocomplete({
   // ── Render ────────────────────────────────────────────────────────────────
 
   const dropdown =
-    open && suggestions.length > 0
+    open && items.length > 0
       ? createPortal(
           <ul
             role="listbox"
@@ -260,24 +243,32 @@ export function AddressAutocomplete({
             }}
             className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-xl"
           >
-            {suggestions.map((f, i) => (
-              <li
-                key={i}
-                role="option"
-                aria-selected={i === activeIndex}
-                onPointerDown={(e) => {
-                  e.preventDefault() // keep input focused until selection is committed
-                  handleSelect(f)
-                }}
-                className={`cursor-pointer px-3 py-2.5 text-sm transition-colors ${
-                  i === activeIndex
-                    ? 'bg-brand-50 text-brand-800'
-                    : 'text-gray-800 hover:bg-gray-50'
-                }`}
-              >
-                {featureLabel(f)}
-              </li>
-            ))}
+            {items.map((item, i) => {
+              const { main, sub } = itemLabel(item)
+              return (
+                <li
+                  key={i}
+                  role="option"
+                  aria-selected={i === activeIndex}
+                  onPointerDown={(e) => {
+                    e.preventDefault()
+                    handleSelect(item)
+                  }}
+                  className={`cursor-pointer px-3 py-2.5 transition-colors ${
+                    i === activeIndex ? 'bg-brand-50' : 'hover:bg-gray-50'
+                  }`}
+                >
+                  <p className={`text-sm font-medium leading-snug ${
+                    i === activeIndex ? 'text-brand-800' : 'text-gray-900'
+                  }`}>
+                    {main}
+                  </p>
+                  {sub && (
+                    <p className="mt-0.5 text-xs text-gray-400">{sub}</p>
+                  )}
+                </li>
+              )
+            })}
           </ul>,
           document.body,
         )
@@ -293,10 +284,7 @@ export function AddressAutocomplete({
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
           onFocus={() => {
-            if (suggestions.length > 0) {
-              measureInput()
-              setOpen(true)
-            }
+            if (items.length > 0) { measureInput(); setOpen(true) }
           }}
           placeholder={placeholder ?? 'Start typing to search address…'}
           disabled={disabled}
@@ -306,8 +294,6 @@ export function AddressAutocomplete({
           aria-expanded={open}
           aria-haspopup="listbox"
         />
-
-        {/* Spinner — inside the input wrapper so it's never clipped */}
         {loading && (
           <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2">
             <svg className="h-4 w-4 animate-spin text-gray-400" viewBox="0 0 24 24" fill="none">
@@ -317,7 +303,6 @@ export function AddressAutocomplete({
           </span>
         )}
       </div>
-
       {dropdown}
     </>
   )

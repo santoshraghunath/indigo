@@ -833,6 +833,7 @@ export interface CreateProjectInput {
   project_type?: string
   address_line1?: string
   city?: string
+  county?: string
   state?: string
   zip?: string
   start_date?: string
@@ -860,6 +861,7 @@ export async function createProject(
       project_type:           input.project_type           ?? null,
       address_line1:          input.address_line1          ?? null,
       city:                   input.city                   ?? null,
+      county:                 input.county                 ?? null,
       state:                  input.state                  ?? null,
       zip:                    input.zip                    ?? null,
       start_date:             input.start_date             ?? null,

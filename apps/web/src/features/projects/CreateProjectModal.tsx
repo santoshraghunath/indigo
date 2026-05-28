@@ -85,9 +85,10 @@ export function CreateProjectModal({ onClose }: Props) {
   const [projectType,       setProjectType]       = useState('')
   const [addressLine1,      setAddressLine1]      = useState('')
   const [city,              setCity]              = useState('')
+  const [county,            setCounty]            = useState('')
   const [state,             setState]             = useState('CA')
   const [zip,               setZip]               = useState('')
-  // Lat/lng captured from Google Places autocomplete — used to auto-pin geofence
+  // Lat/lng captured from HERE autocomplete — used to auto-pin geofence
   const [siteLat,           setSiteLat]           = useState<number | null>(null)
   const [siteLng,           setSiteLng]           = useState<number | null>(null)
   const [startDate,         setStartDate]         = useState('')
@@ -114,6 +115,7 @@ export function CreateProjectModal({ onClose }: Props) {
         project_type:          projectType   || undefined,
         address_line1:         addressLine1.trim() || undefined,
         city:                  city.trim()         || undefined,
+        county:                county.trim()       || undefined,
         state:                 state.trim()        || undefined,
         zip:                   zip.trim()          || undefined,
         start_date:            startDate           || undefined,
@@ -286,15 +288,16 @@ export function CreateProjectModal({ onClose }: Props) {
                       value={addressLine1}
                       onChange={(v) => {
                         setAddressLine1(v)
-                        // Clear coords when the user edits the field manually
+                        // Clear coords when user edits manually (no longer matches a geocoded result)
                         setSiteLat(null)
                         setSiteLng(null)
                       }}
                       onSelect={(r: AddressResult) => {
                         setAddressLine1(r.line1)
-                        if (r.city)  setCity(r.city)
-                        if (r.state) setState(r.state)
-                        if (r.zip)   setZip(r.zip)
+                        if (r.city)   setCity(r.city)
+                        if (r.county) setCounty(r.county)
+                        if (r.state)  setState(r.state)
+                        if (r.zip)    setZip(r.zip)
                         setSiteLat(r.lat)
                         setSiteLng(r.lng)
                       }}
@@ -340,6 +343,17 @@ export function CreateProjectModal({ onClose }: Props) {
                         value={zip}
                         onChange={(e) => setZip(e.target.value)}
                         placeholder="90210"
+                        className={inputCls()}
+                      />
+                    </Field>
+                  </div>
+                  <div className="col-span-4">
+                    <Field label="County">
+                      <input
+                        type="text"
+                        value={county}
+                        onChange={(e) => setCounty(e.target.value)}
+                        placeholder="e.g. Los Angeles"
                         className={inputCls()}
                       />
                     </Field>

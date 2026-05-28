@@ -1,36 +1,32 @@
 /**
- * Geocodes an address string using the Photon API (photon.komoot.io).
- * Free, open-source, no API key required. Based on OpenStreetMap data.
+ * Geocodes an address string using the HERE Geocoding API.
+ * Requires VITE_HERE_API_KEY to be set.
  *
- * Returns { lat, lng } on success, or null if geocoding fails / no result found.
+ * Returns { lat, lng } on success, or null if geocoding fails.
  */
 export async function geocodeAddress(
   address: string,
 ): Promise<{ lat: number; lng: number } | null> {
-  if (!address.trim()) return null
+  const key = import.meta.env.VITE_HERE_API_KEY as string | undefined
+  if (!key || !address.trim()) return null
 
   const url =
-    `https://photon.komoot.io/api/` +
-    `?q=${encodeURIComponent(address)}&limit=1&lang=en`
+    `https://geocode.search.hereapi.com/v1/geocode` +
+    `?q=${encodeURIComponent(address)}&in=countryCode:USA&apiKey=${key}`
 
-  type PhotonResponse = {
-    features: Array<{
-      geometry: { coordinates: [number, number] }
-    }>
+  type HereResponse = {
+    items: Array<{ position?: { lat: number; lng: number } }>
   }
 
-  let data: PhotonResponse
+  let data: HereResponse
   try {
     const res = await fetch(url)
     if (!res.ok) return null
-    data = (await res.json()) as PhotonResponse
+    data = (await res.json()) as HereResponse
   } catch {
     return null
   }
 
-  const first = data.features?.[0]
-  if (!first) return null
-
-  const [lng, lat] = first.geometry.coordinates
-  return { lat, lng }
+  const pos = data.items?.[0]?.position
+  return pos ? { lat: pos.lat, lng: pos.lng } : null
 }
