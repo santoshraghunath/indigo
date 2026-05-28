@@ -13,7 +13,8 @@
   status = 200
 
 [functions]
-  directory  = "functions"
+  # Path is relative to `base` ("apps/web"), so ../../functions = repo-root/functions
+  directory    = "../../functions"
   node_bundler = "esbuild"
 
 [[headers]]

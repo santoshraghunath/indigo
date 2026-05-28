@@ -6,8 +6,8 @@
  *  - Domain / CORS restrictions on the key don't apply (server → server)
  *
  * Query params:
- *   ?mode=discover   (default) — autocomplete suggestions with lat/lng
- *   ?mode=geocode    — convert an address string to lat/lng
+ *   ?mode=autocomplete  (default) — autocomplete suggestions (no lat/lng)
+ *   ?mode=geocode       — convert an address string to lat/lng
  *   &q=<search term>
  */
 
