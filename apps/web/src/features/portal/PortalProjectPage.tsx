@@ -993,8 +993,17 @@ function FinancesTab({
     approved:         'bg-green-100 text-green-700',
   }
 
+  /** Normalise to an Indigo co_status key, falling back to BB's status column. */
+  function effectiveCOStatus(co: PortalChangeOrder): string {
+    if (co.co_status) return co.co_status
+    const bb = (co.status ?? '').toLowerCase()
+    if (bb === 'approved') return 'approved'
+    if (bb === 'pending')  return 'pending_approval'
+    return bb
+  }
+
   const approvedCoTotal = changeOrders
-    .filter((co) => co.co_status === 'approved')
+    .filter((co) => effectiveCOStatus(co) === 'approved')
     .reduce((sum, co) => sum + co.amount_cents, 0)
 
   return (
@@ -1099,8 +1108,9 @@ function FinancesTab({
           </div>
           <div className="space-y-2">
             {changeOrders.map((co) => {
-              const label = CO_STATUS_LABEL[co.co_status ?? ''] ?? co.co_status ?? ''
-              const color = CO_STATUS_COLOR[co.co_status ?? ''] ?? 'bg-gray-100 text-gray-500'
+              const effStatus = effectiveCOStatus(co)
+              const label = CO_STATUS_LABEL[effStatus] ?? effStatus
+              const color = CO_STATUS_COLOR[effStatus] ?? 'bg-gray-100 text-gray-500'
               return (
                 <div key={co.id} className="flex items-start gap-3 rounded-xl border border-gray-100 px-4 py-3">
                   <div className="min-w-0 flex-1">

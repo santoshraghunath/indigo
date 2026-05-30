@@ -95,7 +95,10 @@ export interface PortalChangeOrder {
   title: string | null
   description: string
   amount_cents: number
+  /** Indigo workflow status. May be null for COs created natively in BB. */
   co_status: string | null
+  /** BB-owned status column — used as fallback display when co_status is null. */
+  status: string | null
   date_submitted: string | null
   approved_at: string | null
   schedule_impact_days: number | null
@@ -358,9 +361,11 @@ export async function getPortalProjectData(
       .order('invoice_date', { ascending: false }),
     client
       .from('job_change_orders')
-      .select('id, co_number, title, description, amount_cents, co_status, date_submitted, approved_at, schedule_impact_days, created_at')
+      .select('id, co_number, title, description, amount_cents, co_status, status, date_submitted, approved_at, schedule_impact_days, created_at')
       .eq('job_id', project.job_id)
-      .in('co_status', ['pending_approval', 'approved'])
+      // Include COs tracked via Indigo (co_status set) OR created natively in BB (co_status null,
+      // fall back to BB's status column which defaults 'Pending' and is set to 'Approved' by BB).
+      .or('co_status.in.(pending_approval,approved),and(co_status.is.null,status.in.(Pending,Approved))')
       .order('created_at', { ascending: true }),
   ])
 
