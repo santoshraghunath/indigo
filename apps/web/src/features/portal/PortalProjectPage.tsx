@@ -906,10 +906,14 @@ function TimelineTab({
 
 // ── Invoice status helpers ─────────────────────────────────────────────────
 
-// BB invoice_status is a free text column — normalise to lowercase for matching
+// Normalised invoice status labels and colours.
+// invoice_status is Indigo's lowercase shadow column; status is BB's Title-Case column.
+// We normalise both to lowercase for lookup.
 const INV_STATUS_LABEL: Record<string, string> = {
   draft:    'Draft',
   sent:     'Sent',
+  viewed:   'Viewed',
+  partial:  'Partial',
   paid:     'Paid',
   void:     'Void',
   overdue:  'Overdue',
@@ -918,20 +922,31 @@ const INV_STATUS_LABEL: Record<string, string> = {
 const INV_STATUS_COLOR: Record<string, string> = {
   draft:   'bg-gray-100 text-gray-500',
   sent:    'bg-blue-100 text-blue-700',
+  viewed:  'bg-blue-50 text-blue-600',
+  partial: 'bg-amber-100 text-amber-700',
   paid:    'bg-green-100 text-green-700',
   void:    'bg-red-100 text-red-600',
   overdue: 'bg-amber-100 text-amber-700',
 }
 
-function invStatusKey(status: string | null): string {
-  return (status ?? 'draft').toLowerCase()
+/**
+ * Returns a normalised (lowercase) status key for an invoice.
+ * Prefers Indigo's invoice_status; falls back to BB's status column.
+ * BB-native invoices whose balance is $0 are treated as 'paid' when
+ * neither status field has a more specific value.
+ */
+function invStatusKey(inv: PortalInvoice): string {
+  if (inv.invoice_status) return inv.invoice_status.toLowerCase()
+  if (inv.status)         return inv.status.toLowerCase()
+  // Last-resort inference from balance
+  return inv.balance_due_cents === 0 ? 'paid' : 'draft'
 }
 
 // ── Invoice row ────────────────────────────────────────────────────────────
 
 function InvoiceRow({ inv }: { inv: PortalInvoice }) {
-  const statusKey   = invStatusKey(inv.invoice_status)
-  const statusLabel = INV_STATUS_LABEL[statusKey] ?? inv.invoice_status ?? 'Draft'
+  const statusKey   = invStatusKey(inv)
+  const statusLabel = INV_STATUS_LABEL[statusKey] ?? (inv.invoice_status ?? inv.status ?? 'Draft')
   const statusColor = INV_STATUS_COLOR[statusKey] ?? 'bg-gray-100 text-gray-500'
   const isVoid      = statusKey === 'void'
   const isPaid      = statusKey === 'paid' || inv.balance_due_cents === 0
@@ -1050,7 +1065,7 @@ function FinancesTab({
               <div className="space-y-2">
                 {invoicedPayments.map((m) => {
                   const linkedInv = m.linked_invoice_id ? invoiceById.get(m.linked_invoice_id) : undefined
-                  const sKey      = linkedInv ? invStatusKey(linkedInv.invoice_status) : null
+                  const sKey      = linkedInv ? invStatusKey(linkedInv) : null
                   return (
                     <div key={m.id} className="flex items-center gap-3 rounded-xl border border-gray-100 px-4 py-3">
                       <div className="min-w-0 flex-1">

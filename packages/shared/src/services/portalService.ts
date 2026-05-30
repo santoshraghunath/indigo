@@ -55,7 +55,10 @@ export interface PortalInvoice {
   invoice_number: string
   invoice_date: string
   due_date: string
+  /** Indigo lifecycle status (lowercase). Null for invoices created natively in BB. */
   invoice_status: string | null
+  /** BB-owned status column (Title-Case). Used as fallback when invoice_status is null. */
+  status: string | null
   total_cents: number
   amount_paid_cents: number
   balance_due_cents: number
@@ -355,9 +358,11 @@ export async function getPortalProjectData(
   const [invoicesRes, cosRes] = await Promise.all([
     client
       .from('invoices')
-      .select('id, invoice_number, invoice_date, due_date, invoice_status, total_cents, amount_paid_cents, balance_due_cents, sent_at, paid_at')
+      .select('id, invoice_number, invoice_date, due_date, invoice_status, status, total_cents, amount_paid_cents, balance_due_cents, sent_at, paid_at')
       .eq('job_id', project.job_id)
-      .neq('invoice_status', 'void')
+      // Exclude voided Indigo invoices; BB-native invoices (invoice_status null) are always included.
+      // NULL != 'void' is NULL in SQL (falsy), so we must explicitly allow nulls.
+      .or('invoice_status.is.null,invoice_status.neq.void')
       .order('invoice_date', { ascending: false }),
     client
       .from('job_change_orders')
