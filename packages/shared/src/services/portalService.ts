@@ -147,6 +147,23 @@ export interface PortalSelectionCategory {
   selection: PortalClientSelection | null
 }
 
+/**
+ * A secondary portal contact for a customer.
+ * Created by a PM via the portal-invite Netlify function.
+ * user_id is null until the invited person completes sign-up.
+ */
+export interface CustomerPortalUser {
+  id:          string
+  customer_id: string
+  tenant_id:   string
+  email:       string
+  user_id:     string | null
+  label:       string | null
+  invited_at:  string | null
+  linked_at:   string | null
+  created_at:  string
+}
+
 export interface PortalProjectData {
   project: PortalProject
   milestones: PortalMilestone[]
@@ -237,6 +254,7 @@ export async function getCustomerByUserId(
   client: SupabaseClient,
   userId: string,
 ): Promise<PortalCustomer | null> {
+  // ── Primary contact path ─────────────────────────────────────────────────
   const { data, error } = await client
     .from('customers')
     .select('id, customer_name, email, phone, portal_user_id')
@@ -244,7 +262,56 @@ export async function getCustomerByUserId(
     .maybeSingle()
 
   if (error) throw error
-  return data as PortalCustomer | null
+  if (data) return data as PortalCustomer
+
+  // ── Secondary contact path ────────────────────────────────────────────────
+  // Look up via customer_portal_users → customers join.
+  const { data: cpuRow, error: cpuErr } = await client
+    .from('customer_portal_users')
+    .select('customer:customers(id, customer_name, email, phone, portal_user_id)')
+    .eq('user_id', userId)
+    .maybeSingle()
+
+  if (cpuErr) throw cpuErr
+  if (!cpuRow) return null
+
+  // Supabase returns the joined row as { customer: {...} }
+  const customer = (cpuRow as unknown as { customer: PortalCustomer | null }).customer
+  return customer ?? null
+}
+
+/**
+ * Returns all secondary portal contacts for a customer, ordered oldest-first.
+ * Used by the staff ClientTab to list and manage portal access.
+ */
+export async function getCustomerPortalUsers(
+  client: SupabaseClient,
+  customerId: string,
+): Promise<CustomerPortalUser[]> {
+  const { data, error } = await client
+    .from('customer_portal_users')
+    .select('id, customer_id, tenant_id, email, user_id, label, invited_at, linked_at, created_at')
+    .eq('customer_id', customerId)
+    .order('created_at', { ascending: true })
+
+  if (error) throw error
+  return (data ?? []) as CustomerPortalUser[]
+}
+
+/**
+ * Removes a secondary portal contact by row ID.
+ * The removed user immediately loses portal access (is_client_on_job returns false).
+ */
+export async function removeCustomerPortalUser(
+  client: SupabaseClient,
+  id: string,
+): Promise<void> {
+  const { error } = await client
+    .from('customer_portal_users')
+    .delete()
+    .eq('id', id)
+
+  if (error) throw error
 }
 
 /**
