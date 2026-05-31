@@ -170,6 +170,161 @@ export default defineConfig(({ mode }) => {
           )
         },
       },
+
+      // ── Dev proxy for employee-invite Netlify function ───────────────────
+      // Mirrors functions/employee-invite.ts for local dev without netlify dev.
+      // Auth verification is skipped in dev — the real function checks it.
+      {
+        name: 'netlify-employee-invite-dev',
+        configureServer(server) {
+          server.middlewares.use(
+            '/.netlify/functions/employee-invite',
+            async (req, res) => {
+              if (req.method !== 'POST') {
+                res.writeHead(405)
+                res.end('Method Not Allowed')
+                return
+              }
+
+              const supabaseUrl = env.SUPABASE_URL
+              const serviceKey  = env.SUPABASE_SERVICE_ROLE_KEY
+              const appUrl      = (env.VITE_APP_URL ?? 'http://localhost:5173').replace(/\/$/, '')
+
+              if (!supabaseUrl || !serviceKey) {
+                res.writeHead(503, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: 'SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set in .env.local' }))
+                return
+              }
+
+              let raw = ''
+              for await (const chunk of req) raw += chunk
+
+              let body: Record<string, unknown>
+              try { body = JSON.parse(raw) }
+              catch { res.writeHead(400); res.end('Bad Request'); return }
+
+              const tenantId  = typeof body.tenantId   === 'string' ? body.tenantId.trim()            : ''
+              const email     = typeof body.email      === 'string' ? body.email.trim().toLowerCase()  : ''
+              const firstName = typeof body.firstName  === 'string' ? body.firstName.trim()            : ''
+              const lastName  = typeof body.lastName   === 'string' ? body.lastName.trim()             : ''
+              const role      = typeof body.role       === 'string' ? body.role.trim()                 : ''
+              const title     = typeof body.title      === 'string' ? body.title.trim() || null        : null
+              const phone     = typeof body.phone      === 'string' ? body.phone.trim() || null        : null
+
+              if (!tenantId || !email || !firstName || !lastName || !role) {
+                res.writeHead(400, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: 'tenantId, email, firstName, lastName, and role are required' }))
+                return
+              }
+
+              const headers = {
+                'Content-Type':  'application/json',
+                'Authorization': `Bearer ${serviceKey}`,
+                'apikey':        serviceKey,
+              }
+
+              try {
+                // 1. Send invite
+                const inviteRes = await fetch(`${supabaseUrl}/auth/v1/invite`, {
+                  method:  'POST',
+                  headers: { ...headers },
+                  body: JSON.stringify({
+                    email,
+                    data:        { tenant_id: tenantId, role, first_name: firstName, last_name: lastName },
+                    redirect_to: `${appUrl}/`,
+                  }),
+                })
+
+                const alreadyExists = inviteRes.status === 422
+                if (!inviteRes.ok && !alreadyExists) {
+                  const err = await inviteRes.text()
+                  res.writeHead(500, { 'Content-Type': 'application/json' })
+                  res.end(JSON.stringify({ error: `Invite email failed: ${err}` }))
+                  return
+                }
+
+                let userId: string | null = null
+                if (!alreadyExists) {
+                  const ib = await inviteRes.json() as { id?: string }
+                  userId = ib.id ?? null
+                } else {
+                  const lr = await fetch(
+                    `${supabaseUrl}/auth/v1/admin/users?email=${encodeURIComponent(email)}&page=1&per_page=1`,
+                    { headers },
+                  )
+                  if (lr.ok) {
+                    const lb = await lr.json() as { users?: { id: string }[] }
+                    userId = lb.users?.[0]?.id ?? null
+                  }
+                }
+
+                if (!userId) {
+                  res.writeHead(500, { 'Content-Type': 'application/json' })
+                  res.end(JSON.stringify({ error: 'Could not determine invited user ID' }))
+                  return
+                }
+
+                // 2. Upsert user_profiles
+                await fetch(
+                  `${supabaseUrl}/rest/v1/user_profiles?on_conflict=id`,
+                  {
+                    method:  'POST',
+                    headers: { ...headers, Prefer: 'return=minimal,resolution=ignore-duplicates' },
+                    body: JSON.stringify({ id: userId, first_name: firstName, last_name: lastName, email, phone, title }),
+                  },
+                )
+
+                // 3. Check for existing tenant membership
+                const existingRes = await fetch(
+                  `${supabaseUrl}/rest/v1/tenant_members?select=id,is_active&user_id=eq.${userId}&tenant_id=eq.${tenantId}&limit=1`,
+                  { headers: { ...headers, Accept: 'application/json' } },
+                )
+                const existing = await existingRes.json() as { id: string; is_active: boolean }[]
+
+                if (existing[0]) {
+                  if (!existing[0].is_active) {
+                    await fetch(
+                      `${supabaseUrl}/rest/v1/tenant_members?id=eq.${existing[0].id}`,
+                      {
+                        method:  'PATCH',
+                        headers: { ...headers, Prefer: 'return=minimal' },
+                        body: JSON.stringify({ is_active: true, role }),
+                      },
+                    )
+                  }
+                  res.writeHead(200, { 'Content-Type': 'application/json' })
+                  res.end(JSON.stringify({ userId, alreadyExists: true }))
+                  return
+                }
+
+                // 4. Create tenant_members row
+                const tmRes = await fetch(
+                  `${supabaseUrl}/rest/v1/tenant_members`,
+                  {
+                    method:  'POST',
+                    headers: { ...headers, Prefer: 'return=minimal' },
+                    body: JSON.stringify({ tenant_id: tenantId, user_id: userId, role, is_active: true, invited_at: new Date().toISOString() }),
+                  },
+                )
+
+                if (!tmRes.ok) {
+                  const err = await tmRes.text()
+                  res.writeHead(500, { 'Content-Type': 'application/json' })
+                  res.end(JSON.stringify({ error: `Failed to create tenant membership: ${err}` }))
+                  return
+                }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ userId, alreadyExists }))
+              } catch (err) {
+                res.writeHead(502, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: String(err) }))
+              }
+            },
+          )
+        },
+      },
+
     ],    // end plugins
 
     resolve: {

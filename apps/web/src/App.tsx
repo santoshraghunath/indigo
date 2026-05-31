@@ -19,28 +19,55 @@ import { SubsTab } from '@/features/projects/tabs/SubsTab'
 import { ClientTab } from '@/features/projects/tabs/ClientTab'
 import { ClockTab } from '@/features/projects/tabs/ClockTab'
 import { EmployeesPage } from '@/features/employees/EmployeesPage'
+import { SubcontractorsPage } from '@/features/subcontractors/SubcontractorsPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { PortalLoginPage } from '@/features/portal/PortalLoginPage'
 import { PortalShell } from '@/features/portal/PortalShell'
 import { PortalProjectsPage } from '@/features/portal/PortalProjectsPage'
 import { PortalProjectPage } from '@/features/portal/PortalProjectPage'
 
+// ── Roles restricted to projects-only view ────────────────────────────────
+
+const FIELD_ROLES = new Set(['field_associate', 'field_super', 'subcontractor'])
+
 // ── Staff auth guard ───────────────────────────────────────────────────────
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { user, isLoading } = useAuth()
+  const { user, isLoading, profile, tenantMemberships } = useAuth()
   if (isLoading) return null          // session check in-flight — hold position
   if (user === null) return <Navigate to="/login" replace />
+
+  // Profile has loaded but user has no active memberships →
+  // either deactivated or never added to a tenant.
+  // We gate on profile != null so we don't flash this during the brief
+  // window between isLoading=false and the profile query completing.
+  if (profile !== null && tenantMemberships.length === 0) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
+        <div className="max-w-sm text-center">
+          <div className="text-4xl">🔒</div>
+          <h2 className="mt-4 text-base font-semibold text-gray-900">No access</h2>
+          <p className="mt-2 text-sm text-gray-500">
+            Your account doesn't have access to any workspace. Contact your administrator.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   return <>{children}</>
 }
 
 function AuthRoutes() {
   useAuthListener()
-  const { user, isLoading } = useAuth()
+  const { user, isLoading, tenantMemberships, activeTenantId } = useAuth()
+
+  const activeMembership = tenantMemberships.find((m) => m.tenant_id === activeTenantId)
+  const isFieldRole = FIELD_ROLES.has(activeMembership?.role ?? '')
 
   return (
     <Routes>
-      <Route path="/login" element={isLoading ? null : user ? <Navigate to="/" replace /> : <LoginPage />} />
+      <Route path="/login" element={isLoading ? null : user ? <Navigate to={isFieldRole ? '/projects' : '/'} replace /> : <LoginPage />} />
       <Route
         element={
           <RequireAuth>
@@ -48,7 +75,7 @@ function AuthRoutes() {
           </RequireAuth>
         }
       >
-        <Route index                  element={<DashboardPage />} />
+        <Route index                  element={isFieldRole ? <Navigate to="/projects" replace /> : <DashboardPage />} />
         <Route path="projects"        element={<ProjectsPage />} />
 
         {/* Project detail with nested tab routes */}
@@ -65,12 +92,12 @@ function AuthRoutes() {
         </Route>
 
         <Route path="employees"        element={<EmployeesPage />} />
+        <Route path="subcontractors"  element={<SubcontractorsPage />} />
         <Route path="settings"         element={<SettingsPage />} />
         <Route path="schedule"        element={<ComingSoon name="Schedule" />} />
         <Route path="financials/*"    element={<ComingSoon name="Financials" />} />
         <Route path="documents"       element={<ComingSoon name="Documents" />} />
         <Route path="field/*"         element={<ComingSoon name="Field" />} />
-        <Route path="subcontractors"  element={<ComingSoon name="Subcontractors" />} />
         <Route path="ai"              element={<ComingSoon name="AI Assistant" />} />
         <Route path="*"               element={<Navigate to="/" replace />} />
       </Route>

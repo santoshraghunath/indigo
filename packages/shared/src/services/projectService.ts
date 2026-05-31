@@ -2056,9 +2056,57 @@ export async function deleteInspection(
   if (error) throw error
 }
 
+// ── Project members management ────────────────────────────────────────────────
+
+export interface ProjectMemberRow {
+  id: string
+  project_id: string
+  user_id: string
+  role: string
+  created_at: string
+  profile: { first_name: string; last_name: string; avatar_url: string | null } | null
+}
+
+export async function getProjectMembers(
+  client: SupabaseClient,
+  projectId: string,
+): Promise<ProjectMemberRow[]> {
+  const { data, error } = await client
+    .from('project_members')
+    .select('id, project_id, user_id, role, created_at, profile:user_profiles(first_name, last_name, avatar_url)')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: true })
+  if (error) throw error
+  return (data ?? []) as unknown as ProjectMemberRow[]
+}
+
+export async function addProjectMember(
+  client: SupabaseClient,
+  projectId: string,
+  tenantId: string,
+  userId: string,
+  role: string,
+): Promise<void> {
+  const { error } = await client
+    .from('project_members')
+    .insert({ project_id: projectId, tenant_id: tenantId, user_id: userId, role } as unknown as never)
+  if (error) throw error
+}
+
+export async function removeProjectMember(
+  client: SupabaseClient,
+  memberId: string,
+): Promise<void> {
+  const { error } = await client
+    .from('project_members')
+    .delete()
+    .eq('id', memberId)
+  if (error) throw error
+}
+
 // ── Employee management ──────────────────────────────────────────────────────
 
-export type EmployeeRole = 'owner' | 'admin' | 'project_manager' | 'field_super' | 'accountant'
+export type EmployeeRole = 'owner' | 'admin' | 'project_manager' | 'field_super' | 'field_associate' | 'accountant' | 'subcontractor'
 
 export interface TenantEmployee {
   id:           string   // tenant_members.id
@@ -2324,3 +2372,91 @@ export async function updateProjectDetails(
   if (tasks.length === 0) return   // nothing to update
   await Promise.all(tasks)
 }
+
+// ── Employee status & profile management ──────────────────────────────────────
+// Requires migration 033 (pm_manage_members) for deactivate/reactivate/role-change.
+
+/**
+ * Soft-deactivates an employee by setting is_active = false on their
+ * tenant_members row. Does NOT ban the Supabase auth account.
+ * Deactivated users see a "account deactivated" screen on next login.
+ */
+export async function deactivateEmployee(
+  client: SupabaseClient,
+  memberId: string,
+): Promise<void> {
+  const { error } = await client
+    .from('tenant_members')
+    .update({ is_active: false } as unknown as never)
+    .eq('id', memberId)
+  if (error) throw error
+}
+
+/**
+ * Re-activates a previously deactivated employee.
+ */
+export async function reactivateEmployee(
+  client: SupabaseClient,
+  memberId: string,
+): Promise<void> {
+  const { error } = await client
+    .from('tenant_members')
+    .update({ is_active: true } as unknown as never)
+    .eq('id', memberId)
+  if (error) throw error
+}
+
+export interface UpdateEmployeeInput {
+  /** tenant_members.role — only updatable for non-admin/non-owner members */
+  role?: string
+  /** user_profiles fields */
+  first_name?: string
+  last_name?: string
+  title?: string | null
+  phone?: string | null
+}
+
+/**
+ * Updates an employee's profile (user_profiles) and optionally their role
+ * (tenant_members). Both updates are issued in parallel.
+ */
+export async function updateEmployee(
+  client: SupabaseClient,
+  memberId: string,
+  userId: string,
+  input: UpdateEmployeeInput,
+): Promise<void> {
+  const tasks: Promise<void>[] = []
+
+  const profileFields: Record<string, unknown> = {}
+  if (input.first_name !== undefined) profileFields.first_name = input.first_name
+  if (input.last_name  !== undefined) profileFields.last_name  = input.last_name
+  if (input.title      !== undefined) profileFields.title      = input.title
+  if (input.phone      !== undefined) profileFields.phone      = input.phone
+
+  if (Object.keys(profileFields).length > 0) {
+    tasks.push(
+      Promise.resolve(
+        client
+          .from('user_profiles')
+          .update(profileFields as unknown as never)
+          .eq('id', userId),
+      ).then(({ error }) => { if (error) throw error }),
+    )
+  }
+
+  if (input.role !== undefined) {
+    tasks.push(
+      Promise.resolve(
+        client
+          .from('tenant_members')
+          .update({ role: input.role } as unknown as never)
+          .eq('id', memberId),
+      ).then(({ error }) => { if (error) throw error }),
+    )
+  }
+
+  if (tasks.length === 0) return
+  await Promise.all(tasks)
+}
+

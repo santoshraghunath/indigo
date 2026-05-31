@@ -19,6 +19,10 @@ import {
   upsertEmployeeWage,
   getEmployeeWages,
   setTenantGeofenceDefault,
+  getProjectMembers,
+  addProjectMember,
+  removeProjectMember,
+  getTenantEmployees,
 } from '@indigo/shared'
 import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
@@ -72,6 +76,20 @@ function fmtDate(iso: string): string {
 
 function isPmOrAbove(role: string | undefined): boolean {
   return ['owner', 'admin', 'project_manager'].includes(role ?? '')
+}
+
+const ROLE_LABELS: Record<string, string> = {
+  owner:            'Owner',
+  admin:            'Admin',
+  project_manager:  'Project Manager',
+  field_super:      'Field Super',
+  field_associate:  'Field Associate',
+  accountant:       'Accountant',
+  subcontractor:    'Subcontractor',
+  client:           'Client',
+}
+function formatRole(r: string): string {
+  return ROLE_LABELS[r] ?? r
 }
 
 // ── Elapsed timer component ────────────────────────────────────────────────
@@ -462,6 +480,64 @@ export function ClockTab() {
     onError: (err: Error) => toast.error(err.message),
   })
 
+  // ── PM: Project team management ───────────────────────────────────────────
+  const [showAddMember, setShowAddMember]   = useState(false)
+  const [memberSearch,  setMemberSearch]    = useState('')
+  const [addRole,       setAddRole]         = useState<string>('field_associate')
+
+  const { data: projectMembers = [], isLoading: membersLoading } = useQuery({
+    queryKey: ['project-members', projectId],
+    queryFn:  () => getProjectMembers(supabase, projectId!),
+    enabled:  !!projectId && isPmOrAbove(role),
+    staleTime: 30_000,
+  })
+
+  const { data: tenantEmployees = [] } = useQuery({
+    queryKey: ['tenant-employees', tenantId],
+    queryFn:  () => getTenantEmployees(supabase, tenantId),
+    enabled:  !!tenantId && isPmOrAbove(role) && showAddMember,
+    staleTime: 60_000,
+  })
+
+  const addMemberMut = useMutation({
+    mutationFn: ({ userId, memberRole }: { userId: string; memberRole: string }) =>
+      addProjectMember(supabase, projectId!, tenantId, userId, memberRole),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project-members', projectId] })
+      setMemberSearch('')
+      toast.success('Team member added.')
+    },
+    onError: (err: Error) => {
+      const msg = err.message.includes('duplicate') || err.message.includes('unique')
+        ? 'That person is already on this project.'
+        : 'Failed to add member.'
+      toast.error(msg)
+    },
+  })
+
+  const removeMemberMut = useMutation({
+    mutationFn: (memberId: string) => removeProjectMember(supabase, memberId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['project-members', projectId] })
+      toast.success('Member removed.')
+    },
+    onError: () => toast.error('Failed to remove member.'),
+  })
+
+  // Employees not yet on the project, filtered by search
+  const memberUserIds = new Set(projectMembers.map((m) => m.user_id))
+  const availableToAdd = tenantEmployees.filter((e) => {
+    if (!e.is_active) return false
+    if (memberUserIds.has(e.user_id)) return false
+    if (!memberSearch) return true
+    const q = memberSearch.toLowerCase()
+    return (
+      e.profile?.first_name?.toLowerCase().includes(q) ||
+      e.profile?.last_name?.toLowerCase().includes(q) ||
+      e.profile?.email?.toLowerCase().includes(q)
+    )
+  })
+
   // ── Loading state ─────────────────────────────────────────────────────────
 
   if (projectLoading || sessionLoading) {
@@ -473,7 +549,7 @@ export function ClockTab() {
     )
   }
 
-  const isEmployee = !['subcontractor', 'client'].includes(role ?? '')
+  const isEmployee = role !== 'client'
 
   return (
     <div className="px-5 py-6 lg:px-8 space-y-6 max-w-2xl">
@@ -675,6 +751,118 @@ export function ClockTab() {
           <h2 className="text-sm font-semibold text-gray-700 border-t border-gray-100 pt-5">
             Manager Controls
           </h2>
+
+          {/* Project Team */}
+          <div className="rounded-2xl border border-gray-200 bg-white p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 flex items-center gap-2">
+                <UsersIcon className="h-4 w-4" />
+                Project Team
+              </h3>
+              <button
+                onClick={() => { setShowAddMember((v) => !v); setMemberSearch('') }}
+                className="rounded-lg border border-brand-300 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100 transition-colors"
+              >
+                {showAddMember ? 'Cancel' : '+ Add Member'}
+              </button>
+            </div>
+
+            {/* Add member panel */}
+            {showAddMember && (
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3 space-y-3">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={memberSearch}
+                    onChange={(e) => setMemberSearch(e.target.value)}
+                    placeholder="Search by name or email…"
+                    className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200"
+                  />
+                  <select
+                    value={addRole}
+                    onChange={(e) => setAddRole(e.target.value)}
+                    className="rounded-lg border border-gray-300 px-2 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200"
+                  >
+                    <option value="field_associate">Field Associate</option>
+                    <option value="field_super">Field Super</option>
+                    <option value="project_manager">PM</option>
+                    <option value="subcontractor">Subcontractor</option>
+                  </select>
+                </div>
+
+                {availableToAdd.length === 0 ? (
+                  <p className="text-xs text-gray-400 italic py-1">
+                    {memberSearch ? 'No matches found.' : 'All active team members are already on this project.'}
+                  </p>
+                ) : (
+                  <div className="space-y-1 max-h-48 overflow-y-auto">
+                    {availableToAdd.slice(0, 15).map((emp) => (
+                      <div
+                        key={emp.user_id}
+                        className="flex items-center justify-between rounded-lg bg-white px-3 py-2 border border-gray-100"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">
+                            {emp.profile?.first_name} {emp.profile?.last_name}
+                          </p>
+                          <p className="text-xs text-gray-400 truncate">
+                            {formatRole(emp.role)} · {emp.profile?.email}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => addMemberMut.mutate({ userId: emp.user_id, memberRole: addRole })}
+                          disabled={addMemberMut.isPending}
+                          className="ml-3 shrink-0 rounded-lg bg-brand-600 px-3 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Current member list */}
+            {membersLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-10 w-full rounded-lg" />
+                <Skeleton className="h-10 w-full rounded-lg" />
+              </div>
+            ) : projectMembers.length === 0 ? (
+              <p className="text-sm text-gray-400 italic">
+                No team members assigned yet. Add field workers and subs who will work this project.
+              </p>
+            ) : (
+              <div className="space-y-1">
+                {projectMembers.map((m) => (
+                  <div
+                    key={m.id}
+                    className="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="h-7 w-7 rounded-full bg-brand-100 flex items-center justify-center text-xs font-semibold text-brand-700 shrink-0">
+                        {m.profile?.first_name?.[0] ?? '?'}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">
+                          {m.profile?.first_name} {m.profile?.last_name}
+                        </p>
+                        <p className="text-xs text-gray-400">{formatRole(m.role)}</p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => removeMemberMut.mutate(m.id)}
+                      disabled={removeMemberMut.isPending}
+                      className="ml-3 shrink-0 rounded-lg border border-red-200 px-2.5 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 transition-colors"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Labor cost summary */}
           {laborSummary && (

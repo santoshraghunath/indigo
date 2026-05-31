@@ -21,7 +21,8 @@ interface NavItem {
   end?: boolean
 }
 
-const NAV_ITEMS: NavItem[] = [
+// Full navigation for PM-and-above staff
+const ALL_NAV_ITEMS: NavItem[] = [
   { to: '/',               label: 'Dashboard',      Icon: HomeIcon,      end: true },
   { to: '/projects',       label: 'Projects',        Icon: FolderIcon },
   { to: '/schedule',       label: 'Schedule',        Icon: CalendarIcon },
@@ -33,6 +34,14 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/ai',             label: 'AI Assistant',    Icon: SparklesIcon },
   { to: '/settings',       label: 'Settings',         Icon: GearIcon },
 ]
+
+// Field and subcontractor roles: Projects tab only
+const FIELD_NAV_ITEMS: NavItem[] = [
+  { to: '/projects', label: 'Projects', Icon: FolderIcon },
+]
+
+/** Roles restricted to the Projects-only view */
+const FIELD_ROLES = new Set(['field_associate', 'field_super', 'subcontractor'])
 
 function SidebarNavItem({ item }: { item: NavItem }) {
   return (
@@ -64,9 +73,14 @@ export function AppShell() {
   const { profile, tenantMemberships, activeTenantId } = useAuth()
   const location = useLocation()
 
-  const activeTenant = tenantMemberships.find((m) => m.tenant_id === activeTenantId)?.tenant
-  const userInitial  = profile?.first_name?.[0]?.toUpperCase() ?? '?'
-  const userName     = profile ? `${profile.first_name} ${profile.last_name}` : 'Loading…'
+  const activeMembership = tenantMemberships.find((m) => m.tenant_id === activeTenantId)
+  const activeTenant     = activeMembership?.tenant
+  const userInitial      = profile?.first_name?.[0]?.toUpperCase() ?? '?'
+  const userName         = profile ? `${profile.first_name} ${profile.last_name}` : 'Loading…'
+
+  // Field/sub roles only see the Projects nav item
+  const isFieldRole = FIELD_ROLES.has(activeMembership?.role ?? '')
+  const NAV_ITEMS   = isFieldRole ? FIELD_NAV_ITEMS : ALL_NAV_ITEMS
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-1">

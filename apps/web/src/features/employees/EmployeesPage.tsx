@@ -10,6 +10,9 @@ import {
   getEmployeeSessions,
   getEmployeeWages,
   upsertEmployeeWage,
+  deactivateEmployee,
+  reactivateEmployee,
+  updateEmployee,
 } from '@indigo/shared'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/stores/toastStore'
@@ -67,6 +70,16 @@ const ROLE_COLOR: Record<string, string> = {
   accountant:      'bg-emerald-50 text-emerald-700',
 }
 
+/** Roles that can be assigned to employees (not client / not sub — those live elsewhere) */
+const EMPLOYEE_ROLES = [
+  { value: 'field_associate', label: 'Field Associate' },
+  { value: 'field_super',     label: 'Field Supervisor' },
+  { value: 'project_manager', label: 'Project Manager' },
+  { value: 'accountant',      label: 'Accountant' },
+  { value: 'admin',           label: 'Admin' },
+  { value: 'owner',           label: 'Owner' },
+]
+
 function RoleBadge({ role }: { role: string }) {
   const cls = ROLE_COLOR[role] ?? 'bg-gray-100 text-gray-600'
   return (
@@ -82,6 +95,10 @@ const inputCls =
   'h-9 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm text-gray-900 ' +
   'placeholder:text-gray-400 focus:bg-white focus:border-brand-400 focus:outline-none ' +
   'focus:ring-2 focus:ring-brand-100 transition-colors'
+
+const selectCls =
+  'h-9 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm text-gray-900 ' +
+  'focus:bg-white focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 transition-colors'
 
 // ── Avatar ─────────────────────────────────────────────────────────────────
 
@@ -109,7 +126,297 @@ function Avatar({
   )
 }
 
-// ── Wage entry modal ───────────────────────────────────────────────────────
+// ── Invite employee drawer ─────────────────────────────────────────────────
+
+function InviteDrawer({
+  tenantId,
+  session,
+  onClose,
+  onInvited,
+}: {
+  tenantId: string
+  session: { access_token: string } | null
+  onClose: () => void
+  onInvited: () => void
+}) {
+  const toast = useToast()
+
+  const [firstName, setFirstName] = useState('')
+  const [lastName,  setLastName]  = useState('')
+  const [email,     setEmail]     = useState('')
+  const [role,      setRole]      = useState('field_associate')
+  const [title,     setTitle]     = useState('')
+  const [phone,     setPhone]     = useState('')
+  const [errors,    setErrors]    = useState<Record<string, string>>({})
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const errs: Record<string, string> = {}
+      if (!firstName.trim()) errs.firstName = 'Required'
+      if (!lastName.trim())  errs.lastName  = 'Required'
+      if (!email.trim())     errs.email     = 'Required'
+      else if (!email.includes('@')) errs.email = 'Invalid email'
+      if (Object.keys(errs).length > 0) { setErrors(errs); throw new Error('validation') }
+
+      const res = await fetch('/.netlify/functions/employee-invite', {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({
+          tenantId,
+          email:     email.trim().toLowerCase(),
+          firstName: firstName.trim(),
+          lastName:  lastName.trim(),
+          role,
+          title:     title.trim() || null,
+          phone:     phone.trim() || null,
+        }),
+      })
+      const body = await res.json() as { userId?: string; alreadyExists?: boolean; error?: string }
+      if (!res.ok) throw new Error(body.error ?? 'Failed to send invite')
+      return body
+    },
+    onSuccess: (data) => {
+      toast.success(data.alreadyExists ? 'Invite sent — user is already registered' : 'Invite email sent')
+      onInvited()
+      onClose()
+    },
+    onError: (err) => {
+      if ((err as Error).message !== 'validation') {
+        toast.error('Invite failed', (err as Error).message)
+      }
+    },
+  })
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setErrors({})
+    mutation.mutate()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center px-4 pb-4 sm:pb-0">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+          <h2 className="text-base font-semibold text-gray-900">Invite Employee</h2>
+          <button type="button" onClick={onClose}
+            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 transition-colors">
+            <XMarkIcon className="h-4 w-4" strokeWidth={2} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
+          {/* Name row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">
+                First Name <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={firstName}
+                onChange={(e) => { setFirstName(e.target.value); setErrors((p) => ({ ...p, firstName: '' })) }}
+                placeholder="Jane"
+                className={`${inputCls} ${errors.firstName ? 'border-red-300 bg-red-50' : ''}`}
+                autoFocus
+              />
+              {errors.firstName && <p className="mt-0.5 text-xs text-red-600">{errors.firstName}</p>}
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">
+                Last Name <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={lastName}
+                onChange={(e) => { setLastName(e.target.value); setErrors((p) => ({ ...p, lastName: '' })) }}
+                placeholder="Smith"
+                className={`${inputCls} ${errors.lastName ? 'border-red-300 bg-red-50' : ''}`}
+              />
+              {errors.lastName && <p className="mt-0.5 text-xs text-red-600">{errors.lastName}</p>}
+            </div>
+          </div>
+
+          {/* Email */}
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">
+              Work Email <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => { setEmail(e.target.value); setErrors((p) => ({ ...p, email: '' })) }}
+              placeholder="jane@example.com"
+              className={`${inputCls} ${errors.email ? 'border-red-300 bg-red-50' : ''}`}
+            />
+            {errors.email && <p className="mt-0.5 text-xs text-red-600">{errors.email}</p>}
+          </div>
+
+          {/* Role */}
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Role</label>
+            <select value={role} onChange={(e) => setRole(e.target.value)} className={selectCls}>
+              {EMPLOYEE_ROLES.map((r) => (
+                <option key={r.value} value={r.value}>{r.label}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Optional fields */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Job Title</label>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="e.g. Lead Framer"
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Phone</label>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="(555) 000-0000"
+                className={inputCls}
+              />
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-400">
+            An invite email will be sent with a link to set up their account.
+          </p>
+
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <button type="button" onClick={onClose} disabled={mutation.isPending}
+              className="h-8 rounded-lg px-3.5 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-colors disabled:opacity-50">
+              Cancel
+            </button>
+            <button type="submit" disabled={mutation.isPending}
+              className="inline-flex h-8 items-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-sm hover:bg-brand-700 disabled:opacity-60">
+              {mutation.isPending ? 'Sending…' : 'Send Invite'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ── Edit employee drawer ───────────────────────────────────────────────────
+
+function EditDrawer({
+  employee,
+  canManageAdmins,
+  onClose,
+  onSaved,
+}: {
+  employee: TenantEmployee
+  canManageAdmins: boolean
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const toast = useToast()
+  const name  = employee.profile
+    ? `${employee.profile.first_name} ${employee.profile.last_name}`
+    : 'Employee'
+
+  const [firstName, setFirstName] = useState(employee.profile?.first_name ?? '')
+  const [lastName,  setLastName]  = useState(employee.profile?.last_name  ?? '')
+  const [title,     setTitle]     = useState(employee.profile?.title      ?? '')
+  const [phone,     setPhone]     = useState(employee.profile?.phone      ?? '')
+  const [role,      setRole]      = useState(employee.role)
+
+  const canEditRole = !['admin', 'owner'].includes(employee.role) || canManageAdmins
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      updateEmployee(supabase, employee.id, employee.user_id, {
+        first_name: firstName.trim() || undefined,
+        last_name:  lastName.trim()  || undefined,
+        title:      title.trim()     || null,
+        phone:      phone.trim()     || null,
+        ...(canEditRole && role !== employee.role ? { role } : {}),
+      }),
+    onSuccess: () => {
+      toast.success('Saved')
+      onSaved()
+      onClose()
+    },
+    onError: (err) => {
+      toast.error('Save failed', err instanceof Error ? err.message : 'Try again.')
+    },
+  })
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center px-4 pb-4 sm:pb-0">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-md bg-white rounded-2xl shadow-2xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+          <h2 className="text-base font-semibold text-gray-900">Edit — {name}</h2>
+          <button type="button" onClick={onClose}
+            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 transition-colors">
+            <XMarkIcon className="h-4 w-4" strokeWidth={2} />
+          </button>
+        </div>
+
+        <form onSubmit={(e) => { e.preventDefault(); mutation.mutate() }} className="px-5 py-4 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">First Name</label>
+              <input type="text" value={firstName} onChange={(e) => setFirstName(e.target.value)} className={inputCls} />
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Last Name</label>
+              <input type="text" value={lastName} onChange={(e) => setLastName(e.target.value)} className={inputCls} />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Job Title</label>
+            <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Lead Carpenter" className={inputCls} />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Phone</label>
+            <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(555) 000-0000" className={inputCls} />
+          </div>
+          {canEditRole && (
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Role</label>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value as TenantEmployee['role'])}
+                className={selectCls}
+              >
+                {EMPLOYEE_ROLES.map((r) => (
+                  <option key={r.value} value={r.value}>{r.label}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-1">
+            <button type="button" onClick={onClose} disabled={mutation.isPending}
+              className="h-8 rounded-lg px-3.5 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-colors disabled:opacity-50">
+              Cancel
+            </button>
+            <button type="submit" disabled={mutation.isPending}
+              className="inline-flex h-8 items-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-sm hover:bg-brand-700 disabled:opacity-60">
+              {mutation.isPending ? 'Saving…' : 'Save Changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ── Wage modal ─────────────────────────────────────────────────────────────
 
 function WageModal({
   tenantId,
@@ -128,9 +435,9 @@ function WageModal({
     ? `${employee.profile.first_name} ${employee.profile.last_name}`
     : 'Employee'
 
-  const [rateStr,    setRateStr]    = useState('')
+  const [rateStr,       setRateStr]       = useState('')
   const [effectiveDate, setEffectiveDate] = useState(new Date().toISOString().slice(0, 10))
-  const [rateError,  setRateError]  = useState('')
+  const [rateError,     setRateError]     = useState('')
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -371,13 +678,23 @@ function EmployeeDetail({
 function EmployeeCard({
   employee,
   tenantId,
+  canManage,
   canManageWages,
+  canManageAdmins,
   onWageEdit,
+  onEdit,
+  onToggleActive,
+  onPasswordReset,
 }: {
   employee: TenantEmployee
   tenantId: string
+  canManage: boolean
   canManageWages: boolean
+  canManageAdmins: boolean
   onWageEdit: (emp: TenantEmployee) => void
+  onEdit: (emp: TenantEmployee) => void
+  onToggleActive: (emp: TenantEmployee) => void
+  onPasswordReset: (emp: TenantEmployee) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const name = employee.profile
@@ -388,8 +705,12 @@ function EmployeeCard({
   const phone    = employee.profile?.phone    ?? null
   const avatarUrl = employee.profile?.avatar_url ?? null
 
+  // A PM cannot manage admins/owners (prevent privilege escalation in UI)
+  const isProtectedRole = ['admin', 'owner'].includes(employee.role)
+  const canManageThis   = canManage && (!isProtectedRole || canManageAdmins)
+
   return (
-    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-card">
+    <div className={`overflow-hidden rounded-xl border bg-white shadow-card ${!employee.is_active ? 'border-gray-200 opacity-60' : 'border-gray-200'}`}>
       {/* Header row */}
       <div
         className="flex cursor-pointer items-center gap-4 px-5 py-4 hover:bg-gray-50/50 transition-colors"
@@ -412,25 +733,49 @@ function EmployeeCard({
           </div>
         </div>
 
-        {/* Quick stats */}
-        <div className="hidden shrink-0 items-center gap-6 sm:flex">
-          {employee.current_wage_cents != null && (
-            <div className="text-right">
-              <p className="text-xs font-medium text-gray-500">Rate</p>
-              <p className="text-sm font-semibold text-gray-900">{fmtMoney(employee.current_wage_cents)}/hr</p>
-            </div>
-          )}
-          {canManageWages && (
+        {/* Action buttons (stop propagation so they don't toggle expand) */}
+        {canManageThis && (
+          <div className="hidden shrink-0 items-center gap-1 sm:flex" onClick={(e) => e.stopPropagation()}>
+            {canManageWages && (
+              <button
+                type="button"
+                title="Set wage"
+                onClick={() => onWageEdit(employee)}
+                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-brand-600 transition-colors"
+              >
+                <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
+              </button>
+            )}
             <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); onWageEdit(employee) }}
-              className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-brand-600 transition-colors"
-              title="Edit wage"
+              title="Edit profile"
+              onClick={() => onEdit(employee)}
+              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
             >
-              <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
+              Edit
             </button>
-          )}
-        </div>
+            <button
+              type="button"
+              title={employee.is_active ? 'Deactivate' : 'Reactivate'}
+              onClick={() => onToggleActive(employee)}
+              className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                employee.is_active
+                  ? 'text-red-500 hover:bg-red-50'
+                  : 'text-green-600 hover:bg-green-50'
+              }`}
+            >
+              {employee.is_active ? 'Deactivate' : 'Reactivate'}
+            </button>
+            <button
+              type="button"
+              title="Send password reset email"
+              onClick={() => onPasswordReset(employee)}
+              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
+            >
+              Reset PW
+            </button>
+          </div>
+        )}
 
         <ChevronDownIcon
           className={`h-4 w-4 shrink-0 text-gray-400 transition-transform ${expanded ? 'rotate-180' : ''}`}
@@ -470,20 +815,26 @@ function EmployeesSkeleton() {
   )
 }
 
-// ── Wage modal state helper ────────────────────────────────────────────────
+// ── Modal state helpers ────────────────────────────────────────────────────
 
-type WageModalState = { type: 'none' } | { type: 'wage'; employee: TenantEmployee }
+type ModalState =
+  | { type: 'none' }
+  | { type: 'invite' }
+  | { type: 'wage';   employee: TenantEmployee }
+  | { type: 'edit';   employee: TenantEmployee }
 
 // ── Main page ──────────────────────────────────────────────────────────────
 
 export function EmployeesPage() {
-  const { activeTenantId, tenantMemberships } = useAuth()
+  const { activeTenantId, tenantMemberships, session } = useAuth()
   const queryClient = useQueryClient()
+  const toast       = useToast()
   const tenantId    = activeTenantId ?? ''
 
-  const [search,    setSearch]    = useState('')
+  const [search,     setSearch]     = useState('')
   const [roleFilter, setRoleFilter] = useState<string>('all')
-  const [wageModal, setWageModal] = useState<WageModalState>({ type: 'none' })
+  const [showInactive, setShowInactive] = useState(false)
+  const [modal,      setModal]      = useState<ModalState>({ type: 'none' })
 
   const { data: employees = [], isLoading } = useQuery({
     queryKey: ['tenant-employees', tenantId],
@@ -491,14 +842,47 @@ export function EmployeesPage() {
     enabled:  !!tenantId,
   })
 
-  // Role check — only PM+ can manage wages
-  const canManageWages = (() => {
-    const m = tenantMemberships.find((m) => m.tenant_id === tenantId)
-    return ['owner', 'admin', 'project_manager'].includes(m?.role ?? '')
-  })()
+  // Role checks
+  const myRole = tenantMemberships.find((m) => m.tenant_id === tenantId)?.role ?? ''
+  const canManage      = ['owner', 'admin', 'project_manager'].includes(myRole)
+  const canManageWages = canManage
+  const canManageAdmins = ['owner', 'admin'].includes(myRole)
+
+  // Deactivate / reactivate mutation
+  const toggleMutation = useMutation({
+    mutationFn: (emp: TenantEmployee) =>
+      emp.is_active
+        ? deactivateEmployee(supabase, emp.id)
+        : reactivateEmployee(supabase, emp.id),
+    onSuccess: (_data, emp) => {
+      toast.success(emp.is_active ? 'Employee deactivated' : 'Employee reactivated')
+      void queryClient.invalidateQueries({ queryKey: ['tenant-employees', tenantId] })
+    },
+    onError: (err) => {
+      toast.error('Failed', err instanceof Error ? err.message : 'Try again.')
+    },
+  })
+
+  // Password reset mutation
+  const resetMutation = useMutation({
+    mutationFn: (emp: TenantEmployee) => {
+      const email = emp.profile?.email
+      if (!email) throw new Error('No email on file')
+      return supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/`,
+      })
+    },
+    onSuccess: () => {
+      toast.success('Password reset email sent')
+    },
+    onError: (err) => {
+      toast.error('Failed to send reset email', err instanceof Error ? err.message : 'Try again.')
+    },
+  })
 
   // Filters
   const filtered = employees.filter((emp) => {
+    if (!showInactive && !emp.is_active) return false
     if (roleFilter !== 'all' && emp.role !== roleFilter) return false
     if (search) {
       const q = search.toLowerCase()
@@ -515,8 +899,8 @@ export function EmployeesPage() {
 
   function onWageSaved() {
     void queryClient.invalidateQueries({ queryKey: ['tenant-employees', tenantId] })
-    if (wageModal.type === 'wage') {
-      void queryClient.invalidateQueries({ queryKey: ['employee-wages', tenantId, wageModal.employee.user_id] })
+    if (modal.type === 'wage') {
+      void queryClient.invalidateQueries({ queryKey: ['employee-wages', tenantId, modal.employee.user_id] })
     }
   }
 
@@ -524,16 +908,28 @@ export function EmployeesPage() {
     <div className="px-5 py-6 lg:px-8">
       {/* ── Page header ───────────────────────────────────────── */}
       <div className="mb-6">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50">
-            <UsersIcon className="h-5 w-5 text-brand-600" strokeWidth={1.75} />
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50">
+              <UsersIcon className="h-5 w-5 text-brand-600" strokeWidth={1.75} />
+            </div>
+            <div>
+              <h1 className="text-xl font-semibold text-gray-900">Employees</h1>
+              <p className="text-sm text-gray-500">
+                {isLoading ? 'Loading…' : `${activeCount} active · ${waged} with wage on file`}
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-semibold text-gray-900">Employees</h1>
-            <p className="text-sm text-gray-500">
-              {isLoading ? 'Loading…' : `${activeCount} active · ${waged} with wage on file`}
-            </p>
-          </div>
+          {canManage && (
+            <button
+              type="button"
+              onClick={() => setModal({ type: 'invite' })}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 transition-colors"
+            >
+              <PlusIcon className="h-4 w-4" strokeWidth={2.5} />
+              Invite Employee
+            </button>
+          )}
         </div>
 
         {/* Warning: active employees with no wage */}
@@ -581,13 +977,19 @@ export function EmployeesPage() {
           className="h-9 rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100"
         >
           <option value="all">All Roles</option>
-          <option value="owner">Owner</option>
-          <option value="admin">Admin</option>
-          <option value="project_manager">Project Manager</option>
-          <option value="field_super">Field Supervisor</option>
-          <option value="field_associate">Field Associate</option>
-          <option value="accountant">Accountant</option>
+          {EMPLOYEE_ROLES.map((r) => (
+            <option key={r.value} value={r.value}>{r.label}</option>
+          ))}
         </select>
+        <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-600">
+          <input
+            type="checkbox"
+            checked={showInactive}
+            onChange={(e) => setShowInactive(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+          />
+          Show inactive
+        </label>
         {(search || roleFilter !== 'all') && (
           <button
             type="button"
@@ -611,8 +1013,20 @@ export function EmployeesPage() {
           <p className="mt-1 text-sm text-gray-500 max-w-xs">
             {search || roleFilter !== 'all'
               ? 'Try a different search or filter.'
-              : 'Invite team members from your account settings.'}
+              : canManage
+              ? 'Use "Invite Employee" to add your first team member.'
+              : 'No team members found.'}
           </p>
+          {canManage && !search && roleFilter === 'all' && (
+            <button
+              type="button"
+              onClick={() => setModal({ type: 'invite' })}
+              className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700"
+            >
+              <PlusIcon className="h-4 w-4" strokeWidth={2.5} />
+              Invite Employee
+            </button>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -621,20 +1035,41 @@ export function EmployeesPage() {
               key={emp.id}
               employee={emp}
               tenantId={tenantId}
+              canManage={canManage}
               canManageWages={canManageWages}
-              onWageEdit={(e) => setWageModal({ type: 'wage', employee: e })}
+              canManageAdmins={canManageAdmins}
+              onWageEdit={(e) => setModal({ type: 'wage', employee: e })}
+              onEdit={(e) => setModal({ type: 'edit', employee: e })}
+              onToggleActive={(e) => { if (!toggleMutation.isPending) toggleMutation.mutate(e) }}
+              onPasswordReset={(e) => { if (!resetMutation.isPending) resetMutation.mutate(e) }}
             />
           ))}
         </div>
       )}
 
-      {/* ── Wage modal ────────────────────────────────────────── */}
-      {wageModal.type === 'wage' && (
+      {/* ── Modals ────────────────────────────────────────────── */}
+      {modal.type === 'invite' && (
+        <InviteDrawer
+          tenantId={tenantId}
+          session={session}
+          onClose={() => setModal({ type: 'none' })}
+          onInvited={() => void queryClient.invalidateQueries({ queryKey: ['tenant-employees', tenantId] })}
+        />
+      )}
+      {modal.type === 'wage' && (
         <WageModal
           tenantId={tenantId}
-          employee={wageModal.employee}
-          onClose={() => setWageModal({ type: 'none' })}
+          employee={modal.employee}
+          onClose={() => setModal({ type: 'none' })}
           onSaved={onWageSaved}
+        />
+      )}
+      {modal.type === 'edit' && (
+        <EditDrawer
+          employee={modal.employee}
+          canManageAdmins={canManageAdmins}
+          onClose={() => setModal({ type: 'none' })}
+          onSaved={() => void queryClient.invalidateQueries({ queryKey: ['tenant-employees', tenantId] })}
         />
       )}
     </div>
