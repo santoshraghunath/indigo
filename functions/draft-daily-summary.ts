@@ -20,9 +20,8 @@ import type { Handler } from '@netlify/functions'
 
 const SUPABASE_URL         = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
-const ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY!
-const ANTHROPIC_VERSION    = '2023-06-01'
-const ANTHROPIC_MODEL      = 'claude-haiku-4-5'
+const DEEPSEEK_API_KEY     = process.env.DEEPSEEK_API_KEY!
+const DEEPSEEK_MODEL       = 'deepseek-chat'   // resolves to latest DeepSeek generation
 
 const PM_AND_ABOVE = new Set(['project_manager', 'admin', 'owner'])
 
@@ -97,30 +96,29 @@ ${reportsText}
 
 Write a single cohesive paragraph (4–6 sentences) summarizing today's progress in client-friendly language. Avoid internal jargon, worker names, or role titles. Focus on what was accomplished — what was built, installed, or completed. Keep a positive, forward-looking tone. Do not include a subject line or heading — just the paragraph.`
 
-  // ── Call Anthropic ───────────────────────────────────────────────────────
-  const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
+  // ── Call DeepSeek (OpenAI-compatible chat completions API) ───────────────
+  const deepseekRes = await fetch('https://api.deepseek.com/v1/chat/completions', {
     method: 'POST',
     headers: {
-      'Content-Type':    'application/json',
-      'x-api-key':       ANTHROPIC_API_KEY,
-      'anthropic-version': ANTHROPIC_VERSION,
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${DEEPSEEK_API_KEY}`,
     },
     body: JSON.stringify({
-      model:      ANTHROPIC_MODEL,
-      max_tokens: 512,
-      messages:   [{ role: 'user', content: prompt }],
+      model:       DEEPSEEK_MODEL,
+      max_tokens:  512,
+      messages:    [{ role: 'user', content: prompt }],
     }),
   })
 
-  if (!anthropicRes.ok) {
-    const err = await anthropicRes.text()
+  if (!deepseekRes.ok) {
+    const err = await deepseekRes.text()
     return json(500, { error: `AI draft failed: ${err}` })
   }
 
-  const aiBody = await anthropicRes.json() as {
-    content?: Array<{ type: string; text: string }>
+  const aiBody = await deepseekRes.json() as {
+    choices?: Array<{ message?: { content?: string } }>
   }
-  const draft = aiBody.content?.find((c) => c.type === 'text')?.text ?? ''
+  const draft = aiBody.choices?.[0]?.message?.content ?? ''
 
   return json(200, { draft })
 }
