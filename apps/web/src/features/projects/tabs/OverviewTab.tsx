@@ -661,8 +661,8 @@ function ProjectDetailsModal({
           zip:                   zip.trim()           || null,
           start_date:            startDate            || null,
           target_completion:     targetDate           || null,
-          description:           description.trim()   || null,
-          notes:                 notes.trim()         || null,
+          description:           description.trim()   || '',   // NOT NULL in jobs
+          notes:                 notes.trim()         || '',   // NOT NULL in jobs
           current_contract_cents: cents,
         },
       })
