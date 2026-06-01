@@ -21,7 +21,7 @@ import type { Handler } from '@netlify/functions'
 const SUPABASE_URL         = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const DEEPSEEK_API_KEY     = process.env.DEEPSEEK_API_KEY!
-const DEEPSEEK_MODEL       = 'deepseek-chat'   // resolves to latest DeepSeek generation
+const DEEPSEEK_MODEL       = 'deepseek-v4-flash'
 
 const PM_AND_ABOVE = new Set(['project_manager', 'admin', 'owner'])
 
