@@ -63,6 +63,7 @@ export interface ProjectMilestone {
   requires_client_approval: boolean
   triggers_draw_request: boolean
   triggers_invoice: boolean
+  invoice_amount_cents: number | null
 }
 
 export interface ProjectPhase {
@@ -293,7 +294,8 @@ export async function getProjectPhases(
         is_client_visible,
         requires_client_approval,
         triggers_draw_request,
-        triggers_invoice
+        triggers_invoice,
+        invoice_amount_cents
       )
     `)
     .eq('project_id', projectId)
@@ -988,6 +990,8 @@ export interface UpsertMilestoneInput {
   requires_client_approval: boolean
   triggers_draw_request: boolean
   triggers_invoice: boolean
+  /** Billing amount in cents for invoice-trigger milestones. */
+  invoice_amount_cents?: number | null
 }
 
 export async function upsertMilestone(
@@ -1011,6 +1015,9 @@ export async function upsertMilestone(
         requires_client_approval: input.requires_client_approval,
         triggers_draw_request:   input.triggers_draw_request,
         triggers_invoice:        input.triggers_invoice,
+        ...(input.invoice_amount_cents !== undefined
+          ? { invoice_amount_cents: input.invoice_amount_cents }
+          : {}),
       } as unknown as never)
       .eq('id', input.id)
       .eq('tenant_id', tenantId)
@@ -1036,6 +1043,7 @@ export async function upsertMilestone(
       requires_client_approval: input.requires_client_approval,
       triggers_draw_request:   input.triggers_draw_request,
       triggers_invoice:        input.triggers_invoice,
+      invoice_amount_cents:    input.invoice_amount_cents ?? null,
     } as unknown as never)
     .select('id')
     .single()

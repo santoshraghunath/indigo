@@ -324,6 +324,11 @@ function MilestoneModal({
   const [requiresApproval,      setRequiresApproval]      = useState(milestone?.requires_client_approval ?? false)
   const [triggersDraw,          setTriggersDraw]          = useState(milestone?.triggers_draw_request   ?? false)
   const [triggersInvoice,       setTriggersInvoice]       = useState(milestone?.triggers_invoice        ?? false)
+  const [invoiceAmount,         setInvoiceAmount]         = useState(
+    milestone?.invoice_amount_cents != null
+      ? (milestone.invoice_amount_cents / 100).toFixed(2)
+      : '',
+  )
   const [nameError,             setNameError]             = useState('')
 
   const showCompletedDate = status === 'complete' || status === 'approved'
@@ -343,6 +348,9 @@ function MilestoneModal({
         requires_client_approval: requiresApproval,
         triggers_draw_request:    triggersDraw,
         triggers_invoice:         triggersInvoice,
+        invoice_amount_cents:     triggersInvoice && invoiceAmount.trim()
+          ? Math.round(parseFloat(invoiceAmount.replace(/,/g, '')) * 100)
+          : triggersInvoice ? null : undefined,
       }
       return upsertMilestone(supabase, tenantId, projectId, input)
     },
@@ -458,6 +466,33 @@ function MilestoneModal({
                 </button>
               </label>
             ))}
+
+            {/* Invoice amount — shown when triggers_invoice is on */}
+            {triggersInvoice && (
+              <div className="border-t border-gray-200 pt-2.5">
+                <label className="mb-1.5 block text-sm font-medium text-gray-700">
+                  Invoice Amount
+                  <span className="ml-1 font-normal text-gray-400">(payment due at this milestone)</span>
+                </label>
+                <div className="relative">
+                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                  <input
+                    type="number"
+                    value={invoiceAmount}
+                    onChange={(e) => setInvoiceAmount(e.target.value)}
+                    placeholder="0.00"
+                    min="0"
+                    step="0.01"
+                    className={`${inputCls} pl-7`}
+                  />
+                </div>
+                {!invoiceAmount.trim() && (
+                  <p className="mt-1 text-xs text-amber-600">
+                    Set the amount now, or edit it later in the Financials tab.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -565,8 +600,14 @@ function MilestoneRow({
                 </span>
               )}
               {milestone.triggers_invoice && (
-                <span title="Triggers invoice" className="inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600">
+                <span title="Triggers invoice" className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600">
                   INV
+                  {milestone.invoice_amount_cents != null
+                    ? <span className="font-normal opacity-80">
+                        {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(milestone.invoice_amount_cents / 100)}
+                      </span>
+                    : <span className="font-normal opacity-60">— no amount</span>
+                  }
                 </span>
               )}
               {milestone.requires_client_approval && (
