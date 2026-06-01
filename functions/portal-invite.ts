@@ -10,13 +10,16 @@
  * which has no dependencies of its own.
  *
  * Body (JSON):
- *   customerId  string  — customers.id
- *   tenantId    string  — tenants.id
- *   email       string  — the secondary contact's email
- *   label?      string  — optional label, e.g. "Co-owner"
+ *   customerId  string   — customers.id
+ *   tenantId    string   — tenants.id
+ *   email       string   — the contact's email
+ *   label?      string   — optional label, e.g. "Co-owner" (secondary only)
+ *   isPrimary?  boolean  — when true, skips the customer_portal_users DB write
+ *                          and sends the invite email directly to the primary
+ *                          contact (no secondary record is created)
  *
  * Responses:
- *   200  { id: string, alreadyExists: boolean }
+ *   200  { id: string | null, alreadyExists: boolean }
  *   400  { error: string }
  *   401  { error: string }
  *   403  { error: string }
@@ -76,6 +79,7 @@ export const handler: Handler = async (event) => {
   const tenantId   = typeof body.tenantId   === 'string' ? body.tenantId.trim()   : ''
   const email      = typeof body.email      === 'string' ? body.email.trim().toLowerCase() : ''
   const label      = typeof body.label      === 'string' ? body.label.trim() || null : null
+  const isPrimary  = body.isPrimary === true
 
   if (!customerId || !tenantId || !email) {
     return json(400, { error: 'customerId, tenantId, and email are required' })
@@ -99,32 +103,38 @@ export const handler: Handler = async (event) => {
   )
   const customers = await custRes.json() as { id: string; email: string }[]
   if (!customers[0]) return json(404, { error: 'Customer not found in this tenant' })
-  if (customers[0].email.toLowerCase() === email) {
+
+  // For secondary invites only: block using the primary email as a secondary contact
+  if (!isPrimary && customers[0].email.toLowerCase() === email) {
     return json(400, { error: 'That email is already the primary contact for this customer.' })
   }
 
-  // ── Upsert the customer_portal_users row ─────────────────────────────────
-  const upsertRes = await fetch(
-    `${SUPABASE_URL}/rest/v1/customer_portal_users?on_conflict=customer_id%2Cemail`,
-    {
-      method:  'POST',
-      headers: svcHeaders({ Prefer: 'return=representation,resolution=merge-duplicates' }),
-      body: JSON.stringify({
-        customer_id: customerId,
-        tenant_id:   tenantId,
-        email,
-        label,
-        invited_at:  new Date().toISOString(),
-      }),
-    },
-  )
+  // ── Upsert the customer_portal_users row (secondary contacts only) ────────
+  let id: string | null = null
 
-  if (!upsertRes.ok) {
-    const err = await upsertRes.text()
-    return json(500, { error: `Failed to save portal user record: ${err}` })
+  if (!isPrimary) {
+    const upsertRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/customer_portal_users?on_conflict=customer_id%2Cemail`,
+      {
+        method:  'POST',
+        headers: svcHeaders({ Prefer: 'return=representation,resolution=merge-duplicates' }),
+        body: JSON.stringify({
+          customer_id: customerId,
+          tenant_id:   tenantId,
+          email,
+          label,
+          invited_at:  new Date().toISOString(),
+        }),
+      },
+    )
+
+    if (!upsertRes.ok) {
+      const err = await upsertRes.text()
+      return json(500, { error: `Failed to save portal user record: ${err}` })
+    }
+    const rows = await upsertRes.json() as { id: string }[]
+    id = rows[0]?.id ?? null
   }
-  const rows = await upsertRes.json() as { id: string }[]
-  const id   = rows[0]?.id
 
   // ── Send invite email ────────────────────────────────────────────────────
   // POST /auth/v1/invite creates an account and emails a signup link.

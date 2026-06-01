@@ -33,7 +33,8 @@ async function callPortalInvite(
   tenantId:   string,
   email:      string,
   label:      string | null,
-): Promise<{ id: string; alreadyExists: boolean }> {
+  isPrimary?: boolean,
+): Promise<{ id: string | null; alreadyExists: boolean }> {
   const { data: { session } } = await supabase.auth.getSession()
   const token = session?.access_token
 
@@ -43,17 +44,17 @@ async function callPortalInvite(
       'Content-Type':  'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ customerId, tenantId, email, label }),
+    body: JSON.stringify({ customerId, tenantId, email, label, isPrimary: isPrimary ?? false }),
   })
 
-  const json = await res.json() as { id?: string; alreadyExists?: boolean; error?: string }
+  const json = await res.json() as { id?: string | null; alreadyExists?: boolean; error?: string }
   if (!res.ok) throw new Error(json.error ?? `Request failed (${res.status})`)
-  return json as { id: string; alreadyExists: boolean }
+  return { id: json.id ?? null, alreadyExists: json.alreadyExists ?? false }
 }
 
 // ── Primary portal access card ─────────────────────────────────────────────
 
-function PrimaryPortalCard({ customer }: { customer: JobCustomer }) {
+function PrimaryPortalCard({ customer, tenantId }: { customer: JobCustomer; tenantId: string }) {
   const [sending, setSending] = useState(false)
   const [sent,    setSent]    = useState(false)
   const [err,     setErr]     = useState<string | null>(null)
@@ -65,12 +66,12 @@ function PrimaryPortalCard({ customer }: { customer: JobCustomer }) {
   async function sendInvite() {
     setSending(true)
     setErr(null)
-    const { error } = await supabase.auth.signInWithOtp({
-      email:   customer.email,
-      options: { shouldCreateUser: true, emailRedirectTo: `${appUrl}/portal` },
-    })
-    if (error) setErr(error.message)
-    else       setSent(true)
+    try {
+      await callPortalInvite(customer.id, tenantId, customer.email, null, true)
+      setSent(true)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Something went wrong.')
+    }
     setSending(false)
   }
 
@@ -590,7 +591,7 @@ export function ClientTab() {
       </div>
 
       {/* Primary portal access */}
-      <PrimaryPortalCard customer={customer}/>
+      <PrimaryPortalCard customer={customer} tenantId={activeTenantId ?? ''}/>
 
       {/* Secondary portal contacts — PM+ only */}
       {canManagePortal && activeTenantId && (
