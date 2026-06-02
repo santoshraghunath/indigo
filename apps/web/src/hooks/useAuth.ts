@@ -39,7 +39,9 @@ export function useAuthListener() {
       .eq('user_id', userId)
       .eq('is_active', true)
 
-    if (memberships) setTenantMemberships(memberships as Parameters<typeof setTenantMemberships>[0])
+    // Always call setTenantMemberships (even on empty array) so hasFetchedMemberships
+    // flips to true and RequireAuth can distinguish "not yet loaded" from "loaded & empty".
+    setTenantMemberships((memberships ?? []) as Parameters<typeof setTenantMemberships>[0])
   }
 }
 

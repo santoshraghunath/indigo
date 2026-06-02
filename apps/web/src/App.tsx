@@ -33,15 +33,18 @@ const FIELD_ROLES = new Set(['field_associate', 'field_super', 'subcontractor'])
 // ── Staff auth guard ───────────────────────────────────────────────────────
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  const { user, isLoading, profile, tenantMemberships } = useAuth()
+  const { user, isLoading, profile, tenantMemberships, hasFetchedMemberships } = useAuth()
   if (isLoading) return null          // session check in-flight — hold position
   if (user === null) return <Navigate to="/login" replace />
 
-  // Profile has loaded but user has no active memberships →
-  // either deactivated or never added to a tenant.
-  // We gate on profile != null so we don't flash this during the brief
-  // window between isLoading=false and the profile query completing.
-  if (profile !== null && tenantMemberships.length === 0) {
+  // Show "No access" only once ALL three are true:
+  //   1. profile has loaded (so we're past the initial auth window)
+  //   2. the memberships query has actually completed (hasFetchedMemberships)
+  //   3. the result was empty
+  // Without check 2 we'd briefly show this screen in the race window between
+  // profile loading and the memberships query returning — most visible for
+  // newly invited users on their first sign-in.
+  if (profile !== null && hasFetchedMemberships && tenantMemberships.length === 0) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
         <div className="max-w-sm text-center">

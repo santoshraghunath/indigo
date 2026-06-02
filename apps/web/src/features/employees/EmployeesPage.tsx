@@ -70,10 +70,11 @@ const ROLE_COLOR: Record<string, string> = {
   accountant:      'bg-emerald-50 text-emerald-700',
 }
 
-/** Roles that can be assigned to employees (not client / not sub — those live elsewhere) */
+/** Roles that can be assigned via the Invite Employee drawer. */
 const EMPLOYEE_ROLES = [
   { value: 'field_associate', label: 'Field Associate' },
   { value: 'field_super',     label: 'Field Supervisor' },
+  { value: 'subcontractor',   label: 'Subcontractor' },
   { value: 'project_manager', label: 'Project Manager' },
   { value: 'accountant',      label: 'Accountant' },
   { value: 'admin',           label: 'Admin' },

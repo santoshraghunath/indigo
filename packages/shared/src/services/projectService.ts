@@ -2380,7 +2380,7 @@ export async function getTenantEmployees(
       role,
       is_active,
       created_at,
-      profile:user_profiles ( first_name, last_name, email, avatar_url, title, phone )
+      profile:user_profiles!tenant_members_user_id_fkey ( first_name, last_name, email, avatar_url, title, phone )
     `)
     .eq('tenant_id', tenantId)
     .not('role', 'in', '("subcontractor","client")')
