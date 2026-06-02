@@ -36,10 +36,16 @@ export function WelcomePage() {
   // Still checking session — show nothing rather than a misleading screen.
   if (isLoading) return null
 
-  // Fully set-up user landed here by mistake (e.g. bookmark) — send to app.
-  // Wait until memberships have actually been fetched before redirecting,
-  // so we don't redirect too early on a slow connection.
-  if (user && hasFetchedMemberships && tenantMemberships.length > 0) {
+  // Only redirect to the app once the user has COMPLETED setup (accepted_at
+  // is set by accept_my_invitations() at the end of this form). A new user
+  // has a tenant_members row from the moment they're invited, but accepted_at
+  // stays null until they finish here — so don't use memberships.length as
+  // the "already set up" signal.
+  const hasCompletedSetup = hasFetchedMemberships &&
+    tenantMemberships.length > 0 &&
+    tenantMemberships.some((m) => Boolean((m as Record<string, unknown>).accepted_at))
+
+  if (user && hasCompletedSetup) {
     return <Navigate to="/" replace />
   }
 
