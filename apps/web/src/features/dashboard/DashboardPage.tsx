@@ -49,7 +49,7 @@ export function DashboardPage() {
   const { profile } = useAuth()
   const { stats, isLoading } = useDashboardStats()
   const { data: projects, isLoading: projectsLoading } = useProjects()
-  const recentProjects = projects?.slice(0, 3) ?? []
+  const recentProjects = projects?.filter(p => p.job != null).slice(0, 3) ?? []
 
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long',

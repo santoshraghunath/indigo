@@ -64,7 +64,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function AuthRoutes() {
   useAuthListener()
-  const { user, isLoading, tenantMemberships, activeTenantId } = useAuth()
+  const { user, isLoading, tenantMemberships, activeTenantId, hasFetchedMemberships } = useAuth()
 
   // When a user clicks an invite email link, Supabase appends #type=invite
   // to whatever redirect_to URL was used. Catch it here regardless of
@@ -86,7 +86,7 @@ function AuthRoutes() {
           </RequireAuth>
         }
       >
-        <Route index                  element={isFieldRole ? <Navigate to="/projects" replace /> : <DashboardPage />} />
+        <Route index                  element={!hasFetchedMemberships ? null : isFieldRole ? <Navigate to="/projects" replace /> : <DashboardPage />} />
         <Route path="projects"        element={<ProjectsPage />} />
 
         {/* Project detail with nested tab routes */}
