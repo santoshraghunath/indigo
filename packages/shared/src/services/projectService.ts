@@ -672,6 +672,83 @@ export interface ProjectLienWaiver {
   subcontractor: { id: string; name: string } | null
 }
 
+// ── Punch list mutations ───────────────────────────────────────────────────
+
+export interface CreatePunchListItemInput {
+  title: string
+  description?: string | null
+  location?: string | null
+  trade?: string | null
+  priority?: 'low' | 'normal' | 'high' | 'blocking'
+  due_date?: string | null
+}
+
+export interface UpdatePunchListItemInput {
+  title?: string
+  description?: string | null
+  location?: string | null
+  trade?: string | null
+  priority?: 'low' | 'normal' | 'high' | 'blocking'
+  due_date?: string | null
+  status?: 'open' | 'in_progress' | 'ready_for_review' | 'closed' | 'void'
+}
+
+export async function createPunchListItem(
+  client: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  userId: string,
+  input: CreatePunchListItemInput,
+): Promise<{ id: string }> {
+  const { data, error } = await client
+    .from('punch_list_items')
+    .insert({
+      tenant_id:   tenantId,
+      project_id:  projectId,
+      created_by:  userId,
+      title:       input.title,
+      description: input.description ?? null,
+      location:    input.location    ?? null,
+      trade:       input.trade       ?? null,
+      priority:    input.priority    ?? 'normal',
+      due_date:    input.due_date    ?? null,
+    } as unknown as never)
+    .select('id')
+    .single()
+  if (error) throw error
+  return data as { id: string }
+}
+
+export async function updatePunchListItem(
+  client: SupabaseClient,
+  id: string,
+  input: UpdatePunchListItemInput,
+): Promise<void> {
+  const payload: Record<string, unknown> = { ...input }
+  // Auto-set closed_at when resolving to closed, clear it on any other status change
+  if (input.status === 'closed') {
+    payload.closed_at = new Date().toISOString()
+  } else if (input.status) {
+    payload.closed_at = null
+  }
+  const { error } = await client
+    .from('punch_list_items')
+    .update(payload as unknown as never)
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function deletePunchListItem(
+  client: SupabaseClient,
+  id: string,
+): Promise<void> {
+  const { error } = await client
+    .from('punch_list_items')
+    .delete()
+    .eq('id', id)
+  if (error) throw error
+}
+
 // ── Field queries ──────────────────────────────────────────────────────────
 
 export async function getProjectFieldData(

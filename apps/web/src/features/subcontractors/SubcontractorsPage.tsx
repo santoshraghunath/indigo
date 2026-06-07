@@ -4,6 +4,7 @@ import type { SubCompany, SubContact, UpsertSubCompanyInput, UpsertSubContactInp
 import {
   getSubCompanies,
   getSubContacts,
+  getProjects,
   upsertSubCompany,
   deleteSubCompany,
   upsertSubContact,
@@ -20,6 +21,138 @@ import {
   ChevronDownIcon,
   XMarkIcon,
 } from '@/components/ui/Icons'
+
+// ── Sub-invite helper ──────────────────────────────────────────────────────
+
+async function callSubInvite(
+  contactId: string,
+  email: string,
+  tenantId: string,
+  projectIds: string[],
+): Promise<void> {
+  const { data: { session } } = await supabase.auth.getSession()
+  const token = session?.access_token
+  const res = await fetch('/.netlify/functions/sub-invite', {
+    method:  'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ contactId, email, tenantId, projectIds }),
+  })
+  const json = await res.json() as { error?: string }
+  if (!res.ok) throw new Error(json.error ?? `Request failed (${res.status})`)
+}
+
+// ── Portal invite modal ────────────────────────────────────────────────────
+
+function SubInviteModal({
+  contact,
+  tenantId,
+  onClose,
+  onDone,
+}: {
+  contact: SubContact
+  tenantId: string
+  onClose: () => void
+  onDone: () => void
+}) {
+  const toast = useToast()
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
+  const [sending, setSending] = useState(false)
+
+  const { data: projects = [], isLoading: projectsLoading } = useQuery({
+    queryKey:  ['projects', tenantId],
+    queryFn:   () => getProjects(supabase, tenantId),
+    staleTime: 60_000,
+  })
+
+  function toggleProject(id: string) {
+    setSelectedProjectIds((prev) =>
+      prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id],
+    )
+  }
+
+  async function handleSend() {
+    if (!contact.email) return
+    setSending(true)
+    try {
+      await callSubInvite(contact.id, contact.email, tenantId, selectedProjectIds)
+      toast.success('Invite sent', `${contact.email} will receive an invite email.`)
+      onDone()
+      onClose()
+    } catch (e) {
+      toast.error('Invite failed', (e instanceof Error ? e.message : 'Something went wrong.'))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center px-4 pb-4 sm:pb-0">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-2xl">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Invite to Portal</h2>
+            <p className="mt-0.5 text-xs text-gray-500">{contact.email}</p>
+          </div>
+          <button type="button" onClick={onClose}
+            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 transition-colors">
+            <XMarkIcon className="h-4 w-4" strokeWidth={2} />
+          </button>
+        </div>
+
+        <div className="px-5 py-4 space-y-3">
+          <div>
+            <p className="mb-2 text-xs font-semibold text-gray-600">Assign to projects (optional)</p>
+            {projectsLoading ? (
+              <p className="text-xs text-gray-400">Loading projects…</p>
+            ) : projects.length === 0 ? (
+              <p className="text-xs text-gray-400">No projects yet.</p>
+            ) : (
+              <div className="max-h-48 overflow-y-auto space-y-1 rounded-lg border border-gray-200 p-2">
+                {projects.map((p) => {
+                  const jobName = p.job?.job_name ?? 'Untitled project'
+                  return (
+                    <label key={p.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-gray-50 text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={selectedProjectIds.includes(p.id)}
+                        onChange={() => toggleProject(p.id)}
+                        className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                      />
+                      {jobName}
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          <p className="text-xs text-gray-400">
+            The subcontractor will receive an email invite and can log in to view their assigned projects.
+          </p>
+        </div>
+
+        <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-gray-200">
+          <button type="button" onClick={onClose} disabled={sending}
+            className="h-8 rounded-lg px-3.5 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-colors disabled:opacity-50">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSend}
+            disabled={sending || !contact.email}
+            className="inline-flex h-8 items-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-sm hover:bg-brand-700 disabled:opacity-60"
+          >
+            {sending ? 'Sending…' : contact.user_id ? 'Re-send Invite' : 'Send Invite'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -424,7 +557,8 @@ function SubCompanyCard({
   const queryClient  = useQueryClient()
   const [expanded, setExpanded] = useState(false)
 
-  const [contactModal, setContactModal] = useState<SubContact | null | 'new'>()
+  const [contactModal,  setContactModal]  = useState<SubContact | null | 'new'>()
+  const [inviteContact, setInviteContact] = useState<SubContact | null>()
 
   const { data: contacts = [], isLoading: contactsLoading } = useQuery({
     queryKey: ['sub-contacts', company.id],
@@ -610,11 +744,18 @@ function SubCompanyCard({
                 {contacts.map((c) => (
                   <div key={c.id} className="flex items-center justify-between rounded-lg bg-white border border-gray-200 px-3 py-2 text-sm shadow-sm">
                     <div>
-                      <span className="font-medium text-gray-900">
-                        {c.first_name} {c.last_name}
-                        {c.is_primary && <span className="ml-1 text-[10px] text-brand-600 font-semibold">(Primary)</span>}
-                      </span>
-                      {c.title && <span className="ml-2 text-xs text-gray-400">{c.title}</span>}
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-gray-900">
+                          {c.first_name} {c.last_name}
+                          {c.is_primary && <span className="ml-1 text-[10px] text-brand-600 font-semibold">(Primary)</span>}
+                        </span>
+                        {c.user_id && (
+                          <span className="rounded-full bg-green-50 px-1.5 py-0.5 text-[10px] font-semibold text-green-700">
+                            Portal Active
+                          </span>
+                        )}
+                      </div>
+                      {c.title && <span className="text-xs text-gray-400">{c.title}</span>}
                       <div className="mt-0.5 flex gap-3 text-xs text-gray-400">
                         {c.email && <span>{c.email}</span>}
                         {c.phone && <span>{c.phone}</span>}
@@ -622,6 +763,16 @@ function SubCompanyCard({
                     </div>
                     {canManage && (
                       <div className="flex items-center gap-1 ml-2 shrink-0">
+                        {c.email && (
+                          <button
+                            type="button"
+                            onClick={() => setInviteContact(c)}
+                            className="rounded px-2 py-0.5 text-[11px] font-medium text-brand-600 hover:bg-brand-50 transition-colors"
+                            title={c.user_id ? 'Re-send portal invite' : 'Invite to portal'}
+                          >
+                            {c.user_id ? 'Re-invite' : 'Invite'}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => setContactModal(c)}
@@ -650,7 +801,7 @@ function SubCompanyCard({
         </div>
       )}
 
-      {/* Contact modal */}
+      {/* Contact edit modal */}
       {contactModal !== undefined && (
         <SubContactDrawer
           subCompanyId={company.id}
@@ -661,6 +812,16 @@ function SubCompanyCard({
             setContactModal(undefined)
             void queryClient.invalidateQueries({ queryKey: ['sub-contacts', company.id] })
           }}
+        />
+      )}
+
+      {/* Portal invite modal */}
+      {inviteContact && (
+        <SubInviteModal
+          contact={inviteContact}
+          tenantId={tenantId}
+          onClose={() => setInviteContact(null)}
+          onDone={() => void queryClient.invalidateQueries({ queryKey: ['sub-contacts', company.id] })}
         />
       )}
     </div>

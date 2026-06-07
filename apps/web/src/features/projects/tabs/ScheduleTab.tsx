@@ -561,11 +561,15 @@ type ModalState =
 function MilestoneRow({
   milestone,
   isLast,
+  canEdit,
+  hideFinancials,
   onEdit,
   onDelete,
 }: {
   milestone: ProjectMilestone
   isLast: boolean
+  canEdit: boolean
+  hideFinancials: boolean
   onEdit: (m: ProjectMilestone) => void
   onDelete: (m: ProjectMilestone) => void
 }) {
@@ -599,7 +603,7 @@ function MilestoneRow({
                   DRAW
                 </span>
               )}
-              {milestone.triggers_invoice && (
+              {milestone.triggers_invoice && !hideFinancials && (
                 <span title="Triggers invoice" className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600">
                   INV
                   {milestone.invoice_amount_cents != null
@@ -631,25 +635,27 @@ function MilestoneRow({
               </span>
             ) : null}
 
-            {/* Action buttons — visible on hover */}
-            <div className="ml-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); onEdit(milestone) }}
-                className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-brand-600 transition-colors"
-                title="Edit milestone"
-              >
-                <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
-              </button>
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); onDelete(milestone) }}
-                className="rounded p-0.5 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-                title="Delete milestone"
-              >
-                <TrashIcon className="h-3.5 w-3.5" strokeWidth={2} />
-              </button>
-            </div>
+            {/* Action buttons — visible on hover, hidden for read-only roles */}
+            {canEdit && (
+              <div className="ml-1 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onEdit(milestone) }}
+                  className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-brand-600 transition-colors"
+                  title="Edit milestone"
+                >
+                  <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onDelete(milestone) }}
+                  className="rounded p-0.5 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                  title="Delete milestone"
+                >
+                  <TrashIcon className="h-3.5 w-3.5" strokeWidth={2} />
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -665,6 +671,8 @@ function MilestoneRow({
 
 function PhaseCard({
   phase,
+  canEdit,
+  hideFinancials,
   onEditPhase,
   onDeletePhase,
   onAddMilestone,
@@ -672,6 +680,8 @@ function PhaseCard({
   onDeleteMilestone,
 }: {
   phase: ProjectPhase
+  canEdit: boolean
+  hideFinancials: boolean
   onEditPhase: (p: ProjectPhase) => void
   onDeletePhase: (p: ProjectPhase) => void
   onAddMilestone: (phaseId: string, nextSeq: number) => void
@@ -715,25 +725,27 @@ function PhaseCard({
             </p>
             <p className="text-xs text-gray-400">milestones</p>
           </div>
-          {/* Phase actions */}
-          <div className="flex items-center gap-0.5 ml-1">
-            <button
-              type="button"
-              onClick={() => onEditPhase(phase)}
-              className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-brand-600 transition-colors"
-              title="Edit phase"
-            >
-              <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
-            </button>
-            <button
-              type="button"
-              onClick={() => onDeletePhase(phase)}
-              className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
-              title="Delete phase"
-            >
-              <TrashIcon className="h-3.5 w-3.5" strokeWidth={2} />
-            </button>
-          </div>
+          {/* Phase actions — hidden for read-only roles */}
+          {canEdit && (
+            <div className="flex items-center gap-0.5 ml-1">
+              <button
+                type="button"
+                onClick={() => onEditPhase(phase)}
+                className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-brand-600 transition-colors"
+                title="Edit phase"
+              >
+                <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
+              </button>
+              <button
+                type="button"
+                onClick={() => onDeletePhase(phase)}
+                className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                title="Delete phase"
+              >
+                <TrashIcon className="h-3.5 w-3.5" strokeWidth={2} />
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -753,6 +765,8 @@ function PhaseCard({
               key={m.id}
               milestone={m}
               isLast={i === sorted.length - 1}
+              canEdit={canEdit}
+              hideFinancials={hideFinancials}
               onEdit={onEditMilestone}
               onDelete={onDeleteMilestone}
             />
@@ -764,17 +778,19 @@ function PhaseCard({
         </div>
       )}
 
-      {/* Add milestone button */}
-      <div className="border-t border-gray-100 px-5 py-2.5">
-        <button
-          type="button"
-          onClick={() => onAddMilestone(phase.id, sorted.length)}
-          className="flex items-center gap-1.5 text-xs font-medium text-gray-400 hover:text-brand-600 transition-colors"
-        >
-          <PlusIcon className="h-3.5 w-3.5" strokeWidth={2.5} />
-          Add milestone
-        </button>
-      </div>
+      {/* Add milestone button — hidden for read-only roles */}
+      {canEdit && (
+        <div className="border-t border-gray-100 px-5 py-2.5">
+          <button
+            type="button"
+            onClick={() => onAddMilestone(phase.id, sorted.length)}
+            className="flex items-center gap-1.5 text-xs font-medium text-gray-400 hover:text-brand-600 transition-colors"
+          >
+            <PlusIcon className="h-3.5 w-3.5" strokeWidth={2.5} />
+            Add milestone
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -1073,15 +1089,19 @@ function ViewToggle({ value, onChange }: { value: ViewMode; onChange: (v: ViewMo
 export function ScheduleTab() {
   const { id: projectId } = useParams<{ id: string }>()
   const { isLoading: projectLoading } = useOutletContext<OutletCtx>()
-  const { activeTenantId } = useAuth()
+  const { activeTenantId, tenantMemberships } = useAuth()
   const { data: phases, isLoading: phasesLoading } = useProjectPhases(projectId)
   const queryClient = useQueryClient()
   const [view, setView] = useState<ViewMode>('list')
   const [modal, setModal] = useState<ModalState>({ type: 'none' })
 
-  const isLoading = projectLoading || phasesLoading
-  const sorted    = phases ? [...phases].sort((a, b) => a.sequence - b.sequence) : []
-  const tenantId  = activeTenantId ?? ''
+  const isLoading      = projectLoading || phasesLoading
+  const sorted         = phases ? [...phases].sort((a, b) => a.sequence - b.sequence) : []
+  const tenantId       = activeTenantId ?? ''
+  const activeRole     = tenantMemberships.find((m) => m.tenant_id === tenantId)?.role ?? ''
+  const isSubcontractor = activeRole === 'subcontractor'
+  const canEdit        = !isSubcontractor
+  const hideFinancials = isSubcontractor
 
   function refresh() {
     void queryClient.invalidateQueries({ queryKey: ['project-phases', projectId] })
@@ -1108,28 +1128,32 @@ export function ScheduleTab() {
           <CalendarIcon className="mx-auto h-10 w-10 text-gray-300" strokeWidth={1} />
           <h3 className="mt-3 text-sm font-semibold text-gray-900">No schedule yet</h3>
           <p className="mt-1 text-sm text-gray-500 max-w-xs">
-            Add a phase to start building the project schedule.
+            {canEdit ? 'Add a phase to start building the project schedule.' : 'The schedule has not been set up yet.'}
           </p>
-          <button
-            onClick={() => setModal({ type: 'add-phase' })}
-            className="mt-5 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 transition-colors"
-          >
-            <PlusIcon className="h-4 w-4" strokeWidth={2.5} />
-            Add Phase
-          </button>
+          {canEdit && (
+            <button
+              onClick={() => setModal({ type: 'add-phase' })}
+              className="mt-5 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 transition-colors"
+            >
+              <PlusIcon className="h-4 w-4" strokeWidth={2.5} />
+              Add Phase
+            </button>
+          )}
         </div>
       ) : (
         <>
           <SummaryBar phases={sorted} />
 
           <div className="mb-4 flex items-center justify-between gap-3">
-            <button
-              onClick={() => setModal({ type: 'add-phase' })}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 hover:border-brand-300 hover:text-brand-700 transition-colors"
-            >
-              <PlusIcon className="h-3.5 w-3.5" strokeWidth={2.5} />
-              Add Phase
-            </button>
+            {canEdit ? (
+              <button
+                onClick={() => setModal({ type: 'add-phase' })}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 hover:border-brand-300 hover:text-brand-700 transition-colors"
+              >
+                <PlusIcon className="h-3.5 w-3.5" strokeWidth={2.5} />
+                Add Phase
+              </button>
+            ) : <div />}
             <ViewToggle value={view} onChange={setView} />
           </div>
 
@@ -1139,6 +1163,8 @@ export function ScheduleTab() {
                 <PhaseCard
                   key={phase.id}
                   phase={phase}
+                  canEdit={canEdit}
+                  hideFinancials={hideFinancials}
                   onEditPhase={(p) => setModal({ type: 'edit-phase', phase: p })}
                   onDeletePhase={(p) => setModal({ type: 'delete-phase', phase: p })}
                   onAddMilestone={(phaseId, nextSeq) => setModal({ type: 'add-milestone', phaseId, nextSeq })}

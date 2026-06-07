@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet, useParams } from 'react-router-dom'
 import { useProject } from './useProject'
+import { useAuth } from '@/hooks/useAuth'
 import { StatusBadge, TypeBadge } from '@/components/ui/Badge'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { ChevronRightIcon, MapPinIcon } from '@/components/ui/Icons'
@@ -10,8 +11,11 @@ interface Tab {
   live?: boolean
 }
 
-function tabs(id: string): Tab[] {
-  return [
+// Tabs visible to subcontractor role only
+const SUB_VISIBLE_TABS = new Set(['Overview', 'Schedule', 'Field'])
+
+function tabs(id: string, role: string | null): Tab[] {
+  const all: Tab[] = [
     { to: `/projects/${id}/overview`,    label: 'Overview',    live: true },
     { to: `/projects/${id}/schedule`,    label: 'Schedule',    live: true },
     { to: `/projects/${id}/financials`,  label: 'Financials', live: true },
@@ -21,11 +25,15 @@ function tabs(id: string): Tab[] {
     { to: `/projects/${id}/client`,      label: 'Client', live: true },
     { to: `/projects/${id}/clock`,       label: 'Clock',  live: true },
   ]
+  if (role === 'subcontractor') return all.filter((t) => SUB_VISIBLE_TABS.has(t.label))
+  return all
 }
 
 export function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { data: project, isLoading, error } = useProject(id)
+  const { activeTenantId, tenantMemberships } = useAuth()
+  const role = tenantMemberships.find((m) => m.tenant_id === activeTenantId)?.role ?? null
 
   const job = project?.job
   const address = job
@@ -90,7 +98,7 @@ export function ProjectDetailPage() {
 
         {/* ── Tab bar ───────────────────────────────────────────────── */}
         <div className="flex items-center gap-0 overflow-x-auto border-b border-gray-200 bg-white px-5 lg:px-8">
-          {id && tabs(id).map((tab) => (
+          {id && tabs(id, role).map((tab) => (
             <NavLink
               key={tab.to}
               to={tab.to}

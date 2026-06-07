@@ -12,6 +12,8 @@ import type {
   UpdateDailyLogInput,
   WorkerReportPhotoInfo,
   CreateSummaryLogInput,
+  CreatePunchListItemInput,
+  UpdatePunchListItemInput,
 } from '@indigo/shared'
 import {
   createDailyLog,
@@ -25,13 +27,16 @@ import {
   upsertWorkerDailyReport,
   getWorkerReportPhotos,
   createSummaryLog,
+  createPunchListItem,
+  updatePunchListItem,
+  deletePunchListItem,
 } from '@indigo/shared'
 import { useProjectFieldData } from '../useProject'
 import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
 import { useToast } from '@/stores/toastStore'
 import { Skeleton } from '@/components/ui/Skeleton'
-import { PlusIcon, PencilIcon } from '@/components/ui/Icons'
+import { PlusIcon, PencilIcon, TrashIcon } from '@/components/ui/Icons'
 
 interface OutletCtx {
   project: ProjectRow | undefined
@@ -1842,52 +1847,270 @@ function RfisSection({ rfis }: { rfis: ProjectRfi[] }) {
 
 // ── Punch List ─────────────────────────────────────────────────────────────
 
-function PunchListSection({ items }: { items: ProjectPunchItem[] }) {
+const PUNCH_STATUS_OPTIONS: { value: ProjectPunchItem['status']; label: string }[] = [
+  { value: 'open',             label: 'Open' },
+  { value: 'in_progress',      label: 'In Progress' },
+  { value: 'ready_for_review', label: 'Ready for Review' },
+  { value: 'closed',           label: 'Closed' },
+  { value: 'void',             label: 'Void' },
+]
+
+const PUNCH_PRIORITY_OPTIONS: { value: ProjectPunchItem['priority']; label: string }[] = [
+  { value: 'low',      label: 'Low' },
+  { value: 'normal',   label: 'Normal' },
+  { value: 'high',     label: 'High' },
+  { value: 'blocking', label: 'Blocking' },
+]
+
+interface PunchFormData {
+  title: string
+  description: string | null
+  location: string | null
+  trade: string | null
+  priority: ProjectPunchItem['priority']
+  status: ProjectPunchItem['status']
+  due_date: string | null
+}
+
+function PunchItemForm({
+  item,
+  onSave,
+  onCancel,
+  isSaving,
+}: {
+  item?: ProjectPunchItem | null
+  onSave: (data: PunchFormData) => void
+  onCancel: () => void
+  isSaving: boolean
+}) {
+  const [title,       setTitle]       = useState(item?.title       ?? '')
+  const [description, setDescription] = useState(item?.description ?? '')
+  const [location,    setLocation]    = useState(item?.location    ?? '')
+  const [trade,       setTrade]       = useState(item?.trade       ?? '')
+  const [priority,    setPriority]    = useState<ProjectPunchItem['priority']>(item?.priority ?? 'normal')
+  const [status,      setStatus]      = useState<ProjectPunchItem['status']>(item?.status ?? 'open')
+  const [dueDate,     setDueDate]     = useState(item?.due_date    ?? '')
+
+  const inputCls = 'h-9 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:bg-white focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 transition-colors'
+  const selectCls = 'h-9 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm text-gray-900 focus:bg-white focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 transition-colors'
+  const labelCls = 'mb-1 block text-xs font-medium text-gray-600'
+
+  return (
+    <div className="border-t border-gray-100 bg-gray-50 px-5 py-4">
+      <p className="mb-3 text-xs font-semibold text-gray-700">{item ? 'Edit Item' : 'Add Item'}</p>
+      <div className="space-y-3">
+        <div>
+          <label className={labelCls}>Title <span className="text-red-500">*</span></label>
+          <input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Describe the punch item…"
+            className={inputCls}
+            autoFocus
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div>
+            <label className={labelCls}>Priority</label>
+            <select value={priority} onChange={(e) => setPriority(e.target.value as ProjectPunchItem['priority'])} className={selectCls}>
+              {PUNCH_PRIORITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          {item && (
+            <div>
+              <label className={labelCls}>Status</label>
+              <select value={status} onChange={(e) => setStatus(e.target.value as ProjectPunchItem['status'])} className={selectCls}>
+                {PUNCH_STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          )}
+          <div>
+            <label className={labelCls}>Due Date</label>
+            <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Trade</label>
+            <input type="text" value={trade} onChange={(e) => setTrade(e.target.value)} placeholder="e.g. Framing" className={inputCls} />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <label className={labelCls}>Location</label>
+            <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Master bath" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Notes</label>
+            <input type="text" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Additional details…" className={inputCls} />
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={isSaving}
+          className="h-8 rounded-lg px-3.5 text-sm font-medium text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={!title.trim() || isSaving}
+          onClick={() => onSave({
+            title:       title.trim(),
+            description: description.trim() || null,
+            location:    location.trim()    || null,
+            trade:       trade.trim()       || null,
+            priority,
+            status,
+            due_date:    dueDate            || null,
+          })}
+          className="inline-flex h-8 items-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+        >
+          {isSaving ? 'Saving…' : item ? 'Save' : 'Add Item'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function PunchListSection({
+  items,
+  projectId,
+  tenantId,
+  userId,
+  canDelete,
+}: {
+  items: ProjectPunchItem[]
+  projectId: string
+  tenantId: string
+  userId: string
+  canDelete: boolean
+}) {
+  const queryClient   = useQueryClient()
   const priorityOrder = ['blocking', 'high', 'normal', 'low']
-  const sorted = [...items].sort((a, b) => priorityOrder.indexOf(a.priority) - priorityOrder.indexOf(b.priority))
+  const sorted        = [...items].sort((a, b) => priorityOrder.indexOf(a.priority) - priorityOrder.indexOf(b.priority))
+
+  const [showForm,   setShowForm]   = useState(false)
+  const [editingId,  setEditingId]  = useState<string | null>(null)
+
+  function invalidate() {
+    void queryClient.invalidateQueries({ queryKey: ['project-field', projectId] })
+  }
+
+  const createMut = useMutation({
+    mutationFn: (input: CreatePunchListItemInput) =>
+      createPunchListItem(supabase, tenantId, projectId, userId, input),
+    onSuccess: () => { invalidate(); setShowForm(false) },
+  })
+
+  const updateMut = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: UpdatePunchListItemInput }) =>
+      updatePunchListItem(supabase, id, input),
+    onSuccess: () => { invalidate(); setEditingId(null) },
+  })
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => deletePunchListItem(supabase, id),
+    onSuccess: invalidate,
+  })
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white shadow-card">
       <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
         <h2 className="text-sm font-semibold text-gray-900">Punch List</h2>
-        <span className="text-xs text-gray-400">{items.length} items</span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-400">{items.length} items</span>
+          {!showForm && (
+            <button
+              type="button"
+              onClick={() => { setShowForm(true); setEditingId(null) }}
+              className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-100 hover:text-brand-700 transition-colors"
+            >
+              + Add Item
+            </button>
+          )}
+        </div>
       </div>
 
-      {items.length === 0 ? (
-        <EmptySection label="No punch list items." />
+      {items.length === 0 && !showForm ? (
+        <EmptySection label="No punch list items yet." />
       ) : (
         <div className="divide-y divide-gray-100">
           {sorted.map((item) => {
             const pCfg = PUNCH_PRIORITY[item.priority] ?? PUNCH_PRIORITY.normal
+            const isEditing = editingId === item.id
             return (
-              <div key={item.id} className="flex gap-3 px-5 py-3">
-                <div className="mt-1.5 flex shrink-0 flex-col items-center">
-                  <div className={`h-2.5 w-2.5 rounded-full ring-2 ring-white ${pCfg.dot}`} title={pCfg.label} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`text-sm font-medium ${item.status === 'closed' || item.status === 'void' ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
-                      {item.title}
-                    </span>
-                    <Badge status={item.status} map={PUNCH_STATUS} />
+              <div key={item.id}>
+                {isEditing ? (
+                  <PunchItemForm
+                    item={item}
+                    isSaving={updateMut.isPending}
+                    onCancel={() => setEditingId(null)}
+                    onSave={(data) => updateMut.mutate({ id: item.id, input: data as UpdatePunchListItemInput })}
+                  />
+                ) : (
+                  <div className="group flex gap-3 px-5 py-3">
+                    <div className="mt-1.5 flex shrink-0 flex-col items-center">
+                      <div className={`h-2.5 w-2.5 rounded-full ring-2 ring-white ${pCfg.dot}`} title={pCfg.label} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`text-sm font-medium ${item.status === 'closed' || item.status === 'void' ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                          {item.title}
+                        </span>
+                        <Badge status={item.status} map={PUNCH_STATUS} />
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap gap-2 text-xs text-gray-400">
+                        {item.trade    && <span>{item.trade}</span>}
+                        {item.location && <span>· {item.location}</span>}
+                        {item.due_date && (
+                          <span className={isOverdue(item.due_date) && item.status !== 'closed' ? 'text-amber-600' : ''}>
+                            · Due {fmtDate(item.due_date)}
+                          </span>
+                        )}
+                      </div>
+                      {item.description && (
+                        <p className="mt-0.5 text-xs text-gray-400 line-clamp-1">{item.description}</p>
+                      )}
+                    </div>
+                    {/* Row actions */}
+                    <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                      <button
+                        type="button"
+                        onClick={() => { setEditingId(item.id); setShowForm(false) }}
+                        className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-brand-600 transition-colors"
+                        title="Edit"
+                      >
+                        <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
+                      </button>
+                      {canDelete && (
+                        <button
+                          type="button"
+                          disabled={deleteMut.isPending}
+                          onClick={() => { if (confirm('Delete this punch list item?')) deleteMut.mutate(item.id) }}
+                          className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors disabled:opacity-50"
+                          title="Delete"
+                        >
+                          <TrashIcon className="h-3.5 w-3.5" strokeWidth={2} />
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="mt-0.5 flex flex-wrap gap-2 text-xs text-gray-400">
-                    {item.trade && <span>{item.trade}</span>}
-                    {item.location && <span>· {item.location}</span>}
-                    {item.due_date && (
-                      <span className={isOverdue(item.due_date) && item.status !== 'closed' ? 'text-amber-600' : ''}>
-                        · Due {fmtDate(item.due_date)}
-                      </span>
-                    )}
-                  </div>
-                  {item.description && (
-                    <p className="mt-0.5 text-xs text-gray-400 line-clamp-1">{item.description}</p>
-                  )}
-                </div>
+                )}
               </div>
             )
           })}
         </div>
+      )}
+
+      {showForm && (
+        <PunchItemForm
+          isSaving={createMut.isPending}
+          onCancel={() => setShowForm(false)}
+          onSave={(data) => createMut.mutate(data as CreatePunchListItemInput)}
+        />
       )}
     </div>
   )
@@ -2032,7 +2255,13 @@ export function FieldTab() {
       />
 
       <RfisSection rfis={rfis} />
-      <PunchListSection items={punchItems} />
+      <PunchListSection
+        items={punchItems}
+        projectId={projectId!}
+        tenantId={activeTenantId!}
+        userId={user!.id}
+        canDelete={role !== 'subcontractor'}
+      />
       <SubmittalsSection submittals={submittals} />
     </div>
   )

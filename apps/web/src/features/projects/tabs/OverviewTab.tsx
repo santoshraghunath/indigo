@@ -856,12 +856,10 @@ export function OverviewTab() {
     void queryClient.invalidateQueries({ queryKey: ['project', id] })
   }
 
-  // ── Role check (PM / field_super / owner / admin can edit) ───────────────
-  const canEdit = (() => {
-    const membership = tenantMemberships.find((m) => m.tenant_id === tenantId)
-    const role = membership?.role ?? ''
-    return ['owner', 'admin', 'project_manager', 'field_super'].includes(role)
-  })()
+  // ── Role checks ───────────────────────────────────────────────────────────
+  const activeRole = tenantMemberships.find((m) => m.tenant_id === tenantId)?.role ?? ''
+  const canEdit         = ['owner', 'admin', 'project_manager', 'field_super'].includes(activeRole)
+  const isSubcontractor = activeRole === 'subcontractor'
 
   if (isLoading) {
     return (
@@ -910,15 +908,17 @@ export function OverviewTab() {
     <div className="px-5 py-6 lg:px-8">
       {/* ── Metric cards ──────────────────────────────────────────── */}
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <MetricCard
-          label="Current Contract"
-          value={contractValue != null ? formatMoney(contractValue) : '—'}
-          sub={
-            contractValue != null && originalValue != null && contractValue !== originalValue
-              ? `Original: ${formatMoney(originalValue)}`
-              : undefined
-          }
-        />
+        {!isSubcontractor && (
+          <MetricCard
+            label="Current Contract"
+            value={contractValue != null ? formatMoney(contractValue) : '—'}
+            sub={
+              contractValue != null && originalValue != null && contractValue !== originalValue
+                ? `Original: ${formatMoney(originalValue)}`
+                : undefined
+            }
+          />
+        )}
         <MetricCard label="Start Date"          value={fmtDate(job.start_date)} />
         <MetricCard label="Target Completion"   value={fmtDate(job.target_completion)} />
         <MetricCard label="Days Remaining"      value={daysLeftLabel} accent={daysLeftAccent} />
