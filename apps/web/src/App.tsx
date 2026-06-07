@@ -67,11 +67,13 @@ function AuthRoutes() {
   const { user, isLoading, tenantMemberships, activeTenantId, hasFetchedMemberships } = useAuth()
 
   // When a user clicks an invite email link, Supabase appends #type=invite
-  // to whatever redirect_to URL was used. Catch it here regardless of
-  // which path Supabase chose to redirect to, and send the user to /welcome
-  // so they can set their password before entering the app.
+  // (plus access_token, refresh_token, etc.) to the redirect_to URL.
+  // The redirect_to is now the site root so the invite lands here on /*,
+  // not on /welcome directly. Forward to /welcome with the hash intact so
+  // that Supabase's detectSessionInUrl can still find the tokens and
+  // establish the session before WelcomePage checks for a user.
   const isInviteFlow = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('type') === 'invite'
-  if (isInviteFlow) return <Navigate to="/welcome" replace />
+  if (isInviteFlow) return <Navigate to={'/welcome' + window.location.hash} replace />
 
   const activeMembership = tenantMemberships.find((m) => m.tenant_id === activeTenantId)
   const isFieldRole = FIELD_ROLES.has(activeMembership?.role ?? '')

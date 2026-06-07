@@ -115,7 +115,7 @@ export const handler: Handler = async (event) => {
     body: JSON.stringify({
       email,
       data:        { tenant_id: tenantId, role, first_name: firstName, last_name: lastName },
-      redirect_to: `${APP_URL}/welcome`,
+      redirect_to: APP_URL,
     }),
   })
 
