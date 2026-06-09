@@ -5,6 +5,7 @@ import {
   getPortalProjectData,
   getPortalSelections,
   approvePortalMilestone,
+  approvePortalChangeOrder,
   upsertPortalSelection,
   getDailyLogPhotos,
   formatMoney,
@@ -996,10 +997,16 @@ function FinancesTab({
   milestones,
   invoices,
   changeOrders,
+  onApproveCo,
+  approvingCoId,
+  readOnly,
 }: {
-  milestones:   PortalMilestone[]
-  invoices:     PortalInvoice[]
-  changeOrders: PortalChangeOrder[]
+  milestones:    PortalMilestone[]
+  invoices:      PortalInvoice[]
+  changeOrders:  PortalChangeOrder[]
+  onApproveCo:   (id: string) => void
+  approvingCoId: string | null
+  readOnly:      boolean
 }) {
   // Payment schedule milestones
   const paymentMilestones  = milestones.filter((m) => m.triggers_invoice)
@@ -1133,31 +1140,49 @@ function FinancesTab({
           </div>
           <div className="space-y-2">
             {changeOrders.map((co) => {
-              const effStatus = effectiveCOStatus(co)
-              const label = CO_STATUS_LABEL[effStatus] ?? effStatus
-              const color = CO_STATUS_COLOR[effStatus] ?? 'bg-gray-100 text-gray-500'
+              const effStatus    = effectiveCOStatus(co)
+              const label        = CO_STATUS_LABEL[effStatus] ?? effStatus
+              const color        = CO_STATUS_COLOR[effStatus] ?? 'bg-gray-100 text-gray-500'
+              const isPending    = effStatus === 'pending_approval'
+              const isApproving  = approvingCoId === co.id
               return (
-                <div key={co.id} className="flex items-start gap-3 rounded-xl border border-gray-100 px-4 py-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-xs text-gray-400">{co.co_number}</span>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${color}`}>
-                        {label}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-sm font-medium text-gray-900">
-                      {co.title || co.description || '—'}
-                    </p>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-gray-400">
-                      {co.approved_at && <span>Approved {fmtDateShort(co.approved_at)}</span>}
-                      {co.schedule_impact_days != null && co.schedule_impact_days !== 0 && (
-                        <span>{co.schedule_impact_days > 0 ? '+' : ''}{co.schedule_impact_days} day{Math.abs(co.schedule_impact_days) !== 1 ? 's' : ''}</span>
+                <div key={co.id} className="rounded-xl border border-gray-100 px-4 py-3">
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-xs text-gray-400">{co.co_number}</span>
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${color}`}>
+                          {label}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-sm font-medium text-gray-900">
+                        {co.title || co.description || '—'}
+                      </p>
+                      {co.description && co.title && (
+                        <p className="mt-0.5 text-xs text-gray-500 leading-relaxed">{co.description}</p>
                       )}
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-gray-400">
+                        {co.approved_at && <span>Approved {fmtDateShort(co.approved_at)}</span>}
+                        {co.schedule_impact_days != null && co.schedule_impact_days !== 0 && (
+                          <span>{co.schedule_impact_days > 0 ? '+' : ''}{co.schedule_impact_days} day{Math.abs(co.schedule_impact_days) !== 1 ? 's' : ''}</span>
+                        )}
+                      </div>
                     </div>
+                    <p className={`shrink-0 text-sm font-semibold tabular-nums ${co.amount_cents >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
+                      {co.amount_cents >= 0 ? '+' : ''}{formatMoney(co.amount_cents)}
+                    </p>
                   </div>
-                  <p className={`shrink-0 text-sm font-semibold tabular-nums ${co.amount_cents >= 0 ? 'text-gray-900' : 'text-red-600'}`}>
-                    {co.amount_cents >= 0 ? '+' : ''}{formatMoney(co.amount_cents)}
-                  </p>
+                  {isPending && !readOnly && (
+                    <div className="mt-3 flex justify-end">
+                      <button
+                        onClick={() => onApproveCo(co.id)}
+                        disabled={isApproving}
+                        className="rounded-lg bg-green-600 px-4 py-1.5 text-sm font-semibold text-white shadow-sm hover:bg-green-700 disabled:opacity-50"
+                      >
+                        {isApproving ? 'Approving…' : 'Approve'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -1521,6 +1546,13 @@ export function PortalProjectPage() {
     },
   })
 
+  const approveCoMut = useMutation({
+    mutationFn: (coId: string) => approvePortalChangeOrder(supabase, coId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['portal-project', projectId] })
+    },
+  })
+
   // ── Guards ───────────────────────────────────────────────────────────────
 
   if (isLoading) return <PortalSkeleton/>
@@ -1549,7 +1581,8 @@ export function PortalProjectPage() {
   ).length
 
   const overviewBadge   = pendingApprovalCount + pendingSelectionCount
-  const financesBadge   = invoices.filter((i) => i.balance_due_cents > 0).length
+  const pendingCoCount  = changeOrders.filter((co) => co.co_status === 'pending_approval').length
+  const financesBadge   = invoices.filter((i) => i.balance_due_cents > 0).length + (isStaffPreview ? 0 : pendingCoCount)
   const selectionsBadge = pendingSelectionCount
 
   // ── Tab definitions ───────────────────────────────────────────────────────
@@ -1609,7 +1642,14 @@ export function PortalProjectPage() {
       )}
 
       {activeTab === 'finances' && (
-        <FinancesTab milestones={milestones} invoices={invoices} changeOrders={changeOrders}/>
+        <FinancesTab
+          milestones={milestones}
+          invoices={invoices}
+          changeOrders={changeOrders}
+          onApproveCo={(id) => approveCoMut.mutate(id)}
+          approvingCoId={approveCoMut.isPending ? (approveCoMut.variables ?? null) : null}
+          readOnly={isStaffPreview}
+        />
       )}
 
       {activeTab === 'updates' && (

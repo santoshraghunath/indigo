@@ -193,6 +193,22 @@ export async function linkCustomerByEmail(
 }
 
 /**
+ * Portal client approves a change order via the portal_approve_change_order()
+ * security-definer RPC. The function validates the caller is the job's
+ * client and that the CO is still pending approval.
+ */
+export async function approvePortalChangeOrder(
+  client: SupabaseClient,
+  coId: string,
+): Promise<void> {
+  const { error } = await client.rpc(
+    'portal_approve_change_order',
+    { p_co_id: coId } as unknown as never,
+  )
+  if (error) throw error
+}
+
+/**
  * Portal client approves a milestone via the portal_approve_milestone()
  * security-definer RPC. The function validates the caller is the job's
  * client and that the milestone actually requires approval.
