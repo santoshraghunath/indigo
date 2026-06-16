@@ -254,6 +254,8 @@ function OverviewActions({
   milestones,
   selections,
   invoices,
+  changeOrders,
+  punchItems,
   onApprove,
   approvingId,
   onNavigate,
@@ -262,6 +264,8 @@ function OverviewActions({
   milestones:     PortalMilestone[]
   selections:     PortalSelectionCategory[] | undefined
   invoices:       PortalInvoice[]
+  changeOrders:   PortalChangeOrder[]
+  punchItems:     PortalPunchItem[]
   onApprove:      (id: string) => void
   approvingId:    string | null
   onNavigate:     (tab: TabId) => void
@@ -276,7 +280,10 @@ function OverviewActions({
   )
   const outstanding    = invoices.filter((i) => i.balance_due_cents > 0)
   const outstandingAmt = outstanding.reduce((s, i) => s + i.balance_due_cents, 0)
+  const pendingCOs     = changeOrders.filter((co) => co.co_status === 'pending_approval')
+  const openPunch      = punchItems.filter((p) => p.status !== 'closed')
   const hasActions     = needsApproval.length > 0 || pendingSel.length > 0 || outstanding.length > 0
+                      || pendingCOs.length > 0 || openPunch.length > 0
 
   if (!hasActions) {
     return (
@@ -370,6 +377,54 @@ function OverviewActions({
             <button
               onClick={() => onNavigate('finances')}
               className="shrink-0 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+            >
+              View
+            </button>
+          </div>
+        )}
+
+        {pendingCOs.length > 0 && (
+          <div className="flex items-start gap-3 px-5 py-4">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-600">
+                Change order approval
+              </p>
+              <p className="mt-0.5 text-sm font-medium text-gray-900">
+                {pendingCOs.length} change order{pendingCOs.length !== 1 ? 's' : ''}{' '}
+                {isStaffPreview ? 'awaiting client approval' : 'need your approval'}
+              </p>
+              <p className="mt-0.5 text-xs text-gray-400 truncate">
+                {pendingCOs.slice(0, 2).map((co) => [co.co_number, co.title].filter(Boolean).join(' — ')).join(', ')}
+                {pendingCOs.length > 2 ? ` +${pendingCOs.length - 2} more` : ''}
+              </p>
+            </div>
+            <button
+              onClick={() => onNavigate('finances')}
+              className="shrink-0 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100"
+            >
+              Review
+            </button>
+          </div>
+        )}
+
+        {openPunch.length > 0 && (
+          <div className="flex items-start gap-3 px-5 py-4">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-brand-600">
+                Action items
+              </p>
+              <p className="mt-0.5 text-sm font-medium text-gray-900">
+                {openPunch.length} open action item{openPunch.length !== 1 ? 's' : ''}{' '}
+                {isStaffPreview ? 'awaiting client' : 'need your attention'}
+              </p>
+              <p className="mt-0.5 text-xs text-gray-400 truncate">
+                {openPunch.slice(0, 2).map((p) => p.title).join(', ')}
+                {openPunch.length > 2 ? ` +${openPunch.length - 2} more` : ''}
+              </p>
+            </div>
+            <button
+              onClick={() => onNavigate('action-items')}
+              className="shrink-0 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-semibold text-brand-700 transition-colors hover:bg-brand-100"
             >
               View
             </button>
@@ -1818,6 +1873,8 @@ export function PortalProjectPage() {
             milestones={milestones}
             selections={selections}
             invoices={invoices}
+            changeOrders={changeOrders}
+            punchItems={punchItems}
             onApprove={(id) => approveMut.mutate(id)}
             approvingId={approveMut.isPending ? (approveMut.variables ?? null) : null}
             onNavigate={setTab}
