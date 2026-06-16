@@ -1992,6 +1992,7 @@ export async function logSessionMileage(
 }
 
 export interface EditSessionInput {
+  projectId:     string
   clockedInAt:   string
   clockedOutAt:  string
   breakMinutes:  number
@@ -2001,6 +2002,8 @@ export interface EditSessionInput {
 
 export interface EditSessionResult {
   session_id:       string
+  project_id:       string
+  job_id:           string
   net_hours:        number | null
   regular_hours:    number | null
   ot_1_5_hours:     number | null
@@ -2017,6 +2020,7 @@ export async function pmEditWorkSession(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (client as any).rpc('pm_edit_work_session', {
     p_session_id:     sessionId,
+    p_project_id:     input.projectId,
     p_clocked_in_at:  input.clockedInAt,
     p_clocked_out_at: input.clockedOutAt,
     p_break_minutes:  input.breakMinutes,

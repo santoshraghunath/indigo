@@ -23,6 +23,7 @@ import {
   upsertWorkerDailyReport,
   uploadDailyLogPhoto,
   pmEditWorkSession,
+  getProjects,
 } from '@indigo/shared'
 import type { EditSessionInput } from '@indigo/shared'
 import { useAuth } from '@/hooks/useAuth'
@@ -1243,6 +1244,7 @@ export function ClockTab() {
                   <PmSessionRow
                     key={s.id}
                     session={s}
+                    tenantId={tenantId}
                     onSaved={() => {
                       qc.invalidateQueries({ queryKey: ['work-sessions', projectId] })
                       qc.invalidateQueries({ queryKey: ['project-labor', projectId] })
@@ -1385,17 +1387,26 @@ function SessionHistoryRow({ session, showCost }: { session: WorkSession; showCo
   )
 }
 
-function PmSessionRow({ session, onSaved }: { session: WorkSession; onSaved: () => void }) {
+function PmSessionRow({ session, tenantId, onSaved }: { session: WorkSession; tenantId: string; onSaved: () => void }) {
   const toast = useToast()
   const [open, setOpen] = useState(false)
 
+  const [projectId, setProjectId] = useState(session.project_id)
   const [inVal,     setInVal]     = useState('')
   const [outVal,    setOutVal]    = useState('')
   const [breakMin,  setBreakMin]  = useState('')
   const [notes,     setNotes]     = useState('')
   const [mileage,   setMileage]   = useState('')
 
+  const { data: projects = [] } = useQuery({
+    queryKey: ['projects', tenantId],
+    queryFn: () => getProjects(supabase, tenantId),
+    staleTime: 300_000,
+    enabled: open,
+  })
+
   function openEdit() {
+    setProjectId(session.project_id)
     setInVal(toDatetimeLocal(session.clocked_in_at))
     setOutVal(session.clocked_out_at ? toDatetimeLocal(session.clocked_out_at) : '')
     setBreakMin(String(session.total_break_minutes ?? 0))
@@ -1408,6 +1419,7 @@ function PmSessionRow({ session, onSaved }: { session: WorkSession; onSaved: () 
     mutationFn: () => {
       if (!outVal) throw new Error('Clock-out time is required')
       const input: EditSessionInput = {
+        projectId,
         clockedInAt:  fromDatetimeLocal(inVal),
         clockedOutAt: fromDatetimeLocal(outVal),
         breakMinutes: parseInt(breakMin, 10) || 0,
@@ -1468,6 +1480,21 @@ function PmSessionRow({ session, onSaved }: { session: WorkSession; onSaved: () 
       {/* Inline edit form */}
       {open && (
         <div className="border-t border-brand-100 bg-brand-50/30 px-4 py-4 space-y-3">
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-700">Project</label>
+            <select
+              value={projectId}
+              onChange={(e) => setProjectId(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200 bg-white"
+            >
+              {projects.map((p) => {
+                const job = p.job as { job_number?: string | null; job_name?: string | null } | null
+                const label = job?.job_number ? `${job.job_number} — ${job.job_name}` : (job?.job_name ?? p.id)
+                return <option key={p.id} value={p.id}>{label}</option>
+              })}
+            </select>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-700">Clock In</label>
