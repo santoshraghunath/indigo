@@ -1991,6 +1991,42 @@ export async function logSessionMileage(
   if (error) throw error
 }
 
+export interface EditSessionInput {
+  clockedInAt:   string
+  clockedOutAt:  string
+  breakMinutes:  number
+  notes:         string | null
+  mileageMiles:  number | null
+}
+
+export interface EditSessionResult {
+  session_id:       string
+  net_hours:        number | null
+  regular_hours:    number | null
+  ot_1_5_hours:     number | null
+  ot_2_0_hours:     number | null
+  labor_cost_cents: number | null
+}
+
+/** PM+ edit a completed work session — recomputes hours, OT, and labor cost. */
+export async function pmEditWorkSession(
+  client: SupabaseClient,
+  sessionId: string,
+  input: EditSessionInput,
+): Promise<EditSessionResult> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (client as any).rpc('pm_edit_work_session', {
+    p_session_id:     sessionId,
+    p_clocked_in_at:  input.clockedInAt,
+    p_clocked_out_at: input.clockedOutAt,
+    p_break_minutes:  input.breakMinutes,
+    p_notes:          input.notes ?? null,
+    p_mileage_miles:  input.mileageMiles ?? null,
+  })
+  if (error) throw error
+  return data as EditSessionResult
+}
+
 /** Starts a break on the active session (sets status → 'on_break'). */
 export async function startBreak(
   client: SupabaseClient,

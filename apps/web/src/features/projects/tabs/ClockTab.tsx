@@ -22,7 +22,9 @@ import {
   logSessionMileage,
   upsertWorkerDailyReport,
   uploadDailyLogPhoto,
+  pmEditWorkSession,
 } from '@indigo/shared'
+import type { EditSessionInput } from '@indigo/shared'
 import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
 import { useToast } from '@/stores/toastStore'
@@ -71,6 +73,16 @@ function fmtTime(iso: string): string {
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function toDatetimeLocal(iso: string): string {
+  const d = new Date(iso)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function fromDatetimeLocal(val: string): string {
+  return new Date(val).toISOString()
 }
 
 function isPmOrAbove(role: string | undefined): boolean {
@@ -1217,6 +1229,29 @@ export function ClockTab() {
               </div>
             </div>
           )}
+
+          {/* All recent sessions — editable by PM+ */}
+          {recentSessions.length > 0 && (
+            <div className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
+              <div className="px-5 py-3 border-b border-gray-100">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  Recent Sessions
+                </h3>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {recentSessions.slice(0, 20).map((s) => (
+                  <PmSessionRow
+                    key={s.id}
+                    session={s}
+                    onSaved={() => {
+                      qc.invalidateQueries({ queryKey: ['work-sessions', projectId] })
+                      qc.invalidateQueries({ queryKey: ['project-labor', projectId] })
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
 
@@ -1346,6 +1381,162 @@ function SessionHistoryRow({ session, showCost }: { session: WorkSession; showCo
           <p className="text-xs text-gray-400">{formatCents(session.labor_cost_cents)}</p>
         )}
       </div>
+    </div>
+  )
+}
+
+function PmSessionRow({ session, onSaved }: { session: WorkSession; onSaved: () => void }) {
+  const toast = useToast()
+  const [open, setOpen] = useState(false)
+
+  const [inVal,     setInVal]     = useState('')
+  const [outVal,    setOutVal]    = useState('')
+  const [breakMin,  setBreakMin]  = useState('')
+  const [notes,     setNotes]     = useState('')
+  const [mileage,   setMileage]   = useState('')
+
+  function openEdit() {
+    setInVal(toDatetimeLocal(session.clocked_in_at))
+    setOutVal(session.clocked_out_at ? toDatetimeLocal(session.clocked_out_at) : '')
+    setBreakMin(String(session.total_break_minutes ?? 0))
+    setNotes(session.notes ?? '')
+    setMileage(session.mileage_miles != null ? String(session.mileage_miles) : '')
+    setOpen(true)
+  }
+
+  const saveMut = useMutation({
+    mutationFn: () => {
+      if (!outVal) throw new Error('Clock-out time is required')
+      const input: EditSessionInput = {
+        clockedInAt:  fromDatetimeLocal(inVal),
+        clockedOutAt: fromDatetimeLocal(outVal),
+        breakMinutes: parseInt(breakMin, 10) || 0,
+        notes:        notes.trim() || null,
+        mileageMiles: mileage !== '' ? parseFloat(mileage) : null,
+      }
+      return pmEditWorkSession(supabase, session.id, input)
+    },
+    onSuccess: () => {
+      setOpen(false)
+      toast.success('Session updated.')
+      onSaved()
+    },
+    onError: (err: Error) => {
+      const msg = err.message.includes('clock_out_before_clock_in')
+        ? 'Clock-out must be after clock-in.'
+        : err.message.includes('unauthorized')
+          ? 'You do not have permission to edit sessions.'
+          : 'Failed to save. Please try again.'
+      toast.error(msg)
+    },
+  })
+
+  const workerName = session.user
+    ? `${session.user.first_name} ${session.user.last_name}`
+    : 'Team member'
+
+  return (
+    <div>
+      {/* Row */}
+      <div className="flex items-center justify-between px-4 py-3 text-sm">
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-gray-900 truncate">{workerName}</p>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {fmtDate(session.clocked_in_at)}
+            {' · '}
+            {fmtTime(session.clocked_in_at)} – {session.clocked_out_at ? fmtTime(session.clocked_out_at) : '—'}
+            {session.auto_break_deducted && ' · 30 min lunch'}
+            {session.status === 'auto_closed' && ' · Auto closed'}
+          </p>
+        </div>
+        <div className="flex items-center gap-3 ml-3 shrink-0">
+          <div className="text-right">
+            <p className="font-semibold text-gray-900 tabular-nums">{formatHours(session.net_hours)}</p>
+            {session.labor_cost_cents != null && (
+              <p className="text-xs text-gray-400">{formatCents(session.labor_cost_cents)}</p>
+            )}
+          </div>
+          <button
+            onClick={open ? () => setOpen(false) : openEdit}
+            className="rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            {open ? 'Cancel' : 'Edit'}
+          </button>
+        </div>
+      </div>
+
+      {/* Inline edit form */}
+      {open && (
+        <div className="border-t border-brand-100 bg-brand-50/30 px-4 py-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-700">Clock In</label>
+              <input
+                type="datetime-local"
+                value={inVal}
+                onChange={(e) => setInVal(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-700">Clock Out</label>
+              <input
+                type="datetime-local"
+                value={outVal}
+                onChange={(e) => setOutVal(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-700">Break (min)</label>
+              <input
+                type="number"
+                value={breakMin}
+                onChange={(e) => setBreakMin(e.target.value)}
+                min="0"
+                step="5"
+                className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-700">Mileage (mi)</label>
+              <input
+                type="number"
+                value={mileage}
+                onChange={(e) => setMileage(e.target.value)}
+                min="0"
+                step="0.1"
+                placeholder="—"
+                className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs font-medium text-gray-700">Notes</label>
+            <input
+              type="text"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Optional note about this correction…"
+              className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200"
+            />
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              onClick={() => saveMut.mutate()}
+              disabled={saveMut.isPending || !inVal || !outVal}
+              className="rounded-lg bg-brand-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {saveMut.isPending ? 'Saving…' : 'Save Changes'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
