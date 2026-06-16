@@ -19,6 +19,7 @@ import { FieldTab } from '@/features/projects/tabs/FieldTab'
 import { SubsTab } from '@/features/projects/tabs/SubsTab'
 import { ClientTab } from '@/features/projects/tabs/ClientTab'
 import { ClockTab } from '@/features/projects/tabs/ClockTab'
+import { SelectionsTab } from '@/features/projects/tabs/SelectionsTab'
 import { ReportsPage } from '@/features/reports/ReportsPage'
 import { EmployeesPage } from '@/features/employees/EmployeesPage'
 import { SubcontractorsPage } from '@/features/subcontractors/SubcontractorsPage'
@@ -103,6 +104,7 @@ function AuthRoutes() {
           <Route path="subs"          element={<SubsTab />} />
           <Route path="client"        element={<ClientTab />} />
           <Route path="clock"         element={<ClockTab />} />
+          <Route path="selections"    element={<SelectionsTab />} />
         </Route>
 
         <Route path="reports"           element={<ReportsPage />} />

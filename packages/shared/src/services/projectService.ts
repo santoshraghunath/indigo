@@ -2852,3 +2852,264 @@ export async function updateEmployee(
   await Promise.all(tasks)
 }
 
+// ── PM Selections ───────────────────────────────────────────────────────────
+
+export interface PMSelectionOption {
+  id: string
+  name: string
+  description: string | null
+  sku: string | null
+  vendor: string | null
+  vendor_url: string | null
+  unit_cost_cents: number
+  unit_price_cents: number
+  lead_time_days: number | null
+  sequence: number
+  is_active: boolean
+}
+
+export interface PMClientSelection {
+  id: string
+  customer_id: string
+  option_id: string | null
+  custom_description: string | null
+  custom_vendor: string | null
+  custom_price_cents: number | null
+  notes: string | null
+  selected_at: string | null
+  approved_at: string | null
+}
+
+export interface PMSelectionCategory {
+  id: string
+  name: string
+  description: string | null
+  allowance_cents: number
+  status: string
+  due_date: string | null
+  sequence: number
+  is_client_visible: boolean
+  notes: string | null
+  options: PMSelectionOption[]
+  selection: PMClientSelection | null
+}
+
+export interface CreateSelectionCategoryInput {
+  tenantId: string
+  projectId: string
+  name: string
+  description?: string | null
+  allowance_cents: number
+  due_date?: string | null
+  is_client_visible?: boolean
+  notes?: string | null
+  sequence?: number
+}
+
+export interface UpdateSelectionCategoryInput {
+  name?: string
+  description?: string | null
+  allowance_cents?: number
+  status?: string
+  due_date?: string | null
+  is_client_visible?: boolean
+  notes?: string | null
+}
+
+export interface CreateSelectionOptionInput {
+  categoryId: string
+  name: string
+  description?: string | null
+  sku?: string | null
+  vendor?: string | null
+  vendor_url?: string | null
+  unit_cost_cents?: number
+  unit_price_cents: number
+  lead_time_days?: number | null
+  sequence?: number
+}
+
+export interface UpdateSelectionOptionInput {
+  name?: string
+  description?: string | null
+  sku?: string | null
+  vendor?: string | null
+  vendor_url?: string | null
+  unit_cost_cents?: number
+  unit_price_cents?: number
+  lead_time_days?: number | null
+  is_active?: boolean
+}
+
+export async function getPMSelections(
+  client: SupabaseClient,
+  projectId: string,
+): Promise<PMSelectionCategory[]> {
+  const [catsRes, selsRes] = await Promise.all([
+    client
+      .from('selection_categories')
+      .select(`
+        id, name, description, allowance_cents, status, due_date, sequence, is_client_visible, notes,
+        options:selection_options (
+          id, name, description, sku, vendor, vendor_url,
+          unit_cost_cents, unit_price_cents, lead_time_days, sequence, is_active
+        )
+      `)
+      .eq('project_id', projectId)
+      .order('sequence', { ascending: true }),
+    client
+      .from('client_selections')
+      .select('id, customer_id, category_id, option_id, custom_description, custom_vendor, custom_price_cents, notes, selected_at, approved_at')
+      .eq('project_id', projectId),
+  ])
+
+  if (catsRes.error) throw catsRes.error
+  if (selsRes.error) throw selsRes.error
+
+  const selMap = new Map<string, PMClientSelection>()
+  for (const s of (selsRes.data ?? []) as (PMClientSelection & { category_id: string })[]) {
+    selMap.set(s.category_id, s)
+  }
+
+  return ((catsRes.data ?? []) as (Omit<PMSelectionCategory, 'selection' | 'options'> & { options: PMSelectionOption[] })[]).map(
+    (cat) => ({
+      ...cat,
+      options: (cat.options ?? []).sort((a, b) => a.sequence - b.sequence),
+      selection: selMap.get(cat.id) ?? null,
+    }),
+  )
+}
+
+export async function createSelectionCategory(
+  client: SupabaseClient,
+  input: CreateSelectionCategoryInput,
+): Promise<PMSelectionCategory> {
+  const { data, error } = await client
+    .from('selection_categories')
+    .insert({
+      tenant_id:         input.tenantId,
+      project_id:        input.projectId,
+      name:              input.name,
+      description:       input.description ?? null,
+      allowance_cents:   input.allowance_cents,
+      due_date:          input.due_date ?? null,
+      is_client_visible: input.is_client_visible ?? false,
+      notes:             input.notes ?? null,
+      sequence:          input.sequence ?? 0,
+    } as unknown as never)
+    .select('id, name, description, allowance_cents, status, due_date, sequence, is_client_visible, notes')
+    .single()
+
+  if (error) throw error
+  const row = data as unknown as Omit<PMSelectionCategory, 'options' | 'selection'>
+  return { ...row, options: [], selection: null }
+}
+
+export async function updateSelectionCategory(
+  client: SupabaseClient,
+  categoryId: string,
+  input: UpdateSelectionCategoryInput,
+): Promise<void> {
+  const patch: Record<string, unknown> = {}
+  if (input.name             !== undefined) patch.name              = input.name
+  if (input.description      !== undefined) patch.description       = input.description
+  if (input.allowance_cents  !== undefined) patch.allowance_cents   = input.allowance_cents
+  if (input.status           !== undefined) patch.status            = input.status
+  if (input.due_date         !== undefined) patch.due_date          = input.due_date
+  if (input.is_client_visible !== undefined) patch.is_client_visible = input.is_client_visible
+  if (input.notes            !== undefined) patch.notes             = input.notes
+
+  const { error } = await client
+    .from('selection_categories')
+    .update(patch as never)
+    .eq('id', categoryId)
+
+  if (error) throw error
+}
+
+export async function deleteSelectionCategory(
+  client: SupabaseClient,
+  categoryId: string,
+): Promise<void> {
+  const { error } = await client
+    .from('selection_categories')
+    .delete()
+    .eq('id', categoryId)
+
+  if (error) throw error
+}
+
+export async function createSelectionOption(
+  client: SupabaseClient,
+  input: CreateSelectionOptionInput,
+): Promise<PMSelectionOption> {
+  const { data, error } = await client
+    .from('selection_options')
+    .insert({
+      category_id:      input.categoryId,
+      name:             input.name,
+      description:      input.description ?? null,
+      sku:              input.sku ?? null,
+      vendor:           input.vendor ?? null,
+      vendor_url:       input.vendor_url ?? null,
+      unit_cost_cents:  input.unit_cost_cents ?? 0,
+      unit_price_cents: input.unit_price_cents,
+      lead_time_days:   input.lead_time_days ?? null,
+      sequence:         input.sequence ?? 0,
+    } as unknown as never)
+    .select('id, name, description, sku, vendor, vendor_url, unit_cost_cents, unit_price_cents, lead_time_days, sequence, is_active')
+    .single()
+
+  if (error) throw error
+  return data as unknown as PMSelectionOption
+}
+
+export async function updateSelectionOption(
+  client: SupabaseClient,
+  optionId: string,
+  input: UpdateSelectionOptionInput,
+): Promise<void> {
+  const patch: Record<string, unknown> = {}
+  if (input.name             !== undefined) patch.name             = input.name
+  if (input.description      !== undefined) patch.description      = input.description
+  if (input.sku              !== undefined) patch.sku              = input.sku
+  if (input.vendor           !== undefined) patch.vendor           = input.vendor
+  if (input.vendor_url       !== undefined) patch.vendor_url       = input.vendor_url
+  if (input.unit_cost_cents  !== undefined) patch.unit_cost_cents  = input.unit_cost_cents
+  if (input.unit_price_cents !== undefined) patch.unit_price_cents = input.unit_price_cents
+  if (input.lead_time_days   !== undefined) patch.lead_time_days   = input.lead_time_days
+  if (input.is_active        !== undefined) patch.is_active        = input.is_active
+
+  const { error } = await client
+    .from('selection_options')
+    .update(patch as never)
+    .eq('id', optionId)
+
+  if (error) throw error
+}
+
+export async function deleteSelectionOption(
+  client: SupabaseClient,
+  optionId: string,
+): Promise<void> {
+  const { error } = await client
+    .from('selection_options')
+    .delete()
+    .eq('id', optionId)
+
+  if (error) throw error
+}
+
+export async function approvePMClientSelection(
+  client: SupabaseClient,
+  selectionId: string,
+  approverId: string,
+): Promise<void> {
+  const { error } = await client
+    .from('client_selections')
+    .update({ approved_at: new Date().toISOString(), approved_by: approverId } as never)
+    .eq('id', selectionId)
+
+  if (error) throw error
+}
+

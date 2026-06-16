@@ -11,8 +11,8 @@ interface Tab {
   live?: boolean
 }
 
-const EMPLOYEE_TABS     = new Set(['Overview', 'Schedule', 'Clock'])
-const SUB_VISIBLE_TABS  = new Set(['Overview', 'Schedule', 'Field'])
+const EMPLOYEE_TABS    = new Set(['Overview', 'Schedule', 'Clock'])
+const SUB_VISIBLE_TABS = new Set(['Overview', 'Schedule', 'Field'])
 
 function tabs(id: string, role: string | null): Tab[] {
   const all: Tab[] = [
@@ -23,7 +23,8 @@ function tabs(id: string, role: string | null): Tab[] {
     { to: `/projects/${id}/field`,       label: 'Field',  live: true },
     { to: `/projects/${id}/subs`,        label: 'Subs',   live: true },
     { to: `/projects/${id}/client`,      label: 'Client', live: true },
-    { to: `/projects/${id}/clock`,       label: 'Clock',  live: true },
+    { to: `/projects/${id}/clock`,       label: 'Clock',      live: true },
+    { to: `/projects/${id}/selections`,  label: 'Selections', live: true },
   ]
   if (role === 'field_associate' || role === 'field_super')
     return all.filter((t) => EMPLOYEE_TABS.has(t.label))
