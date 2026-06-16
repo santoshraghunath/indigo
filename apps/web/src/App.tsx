@@ -19,6 +19,7 @@ import { FieldTab } from '@/features/projects/tabs/FieldTab'
 import { SubsTab } from '@/features/projects/tabs/SubsTab'
 import { ClientTab } from '@/features/projects/tabs/ClientTab'
 import { ClockTab } from '@/features/projects/tabs/ClockTab'
+import { ReportsPage } from '@/features/reports/ReportsPage'
 import { EmployeesPage } from '@/features/employees/EmployeesPage'
 import { SubcontractorsPage } from '@/features/subcontractors/SubcontractorsPage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
@@ -104,6 +105,7 @@ function AuthRoutes() {
           <Route path="clock"         element={<ClockTab />} />
         </Route>
 
+        <Route path="reports"           element={<ReportsPage />} />
         <Route path="employees"        element={<EmployeesPage />} />
         <Route path="subcontractors"  element={<SubcontractorsPage />} />
         <Route path="settings"         element={<SettingsPage />} />

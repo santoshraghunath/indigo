@@ -14,6 +14,7 @@ import {
   Bars3Icon,
   GearIcon,
   XMarkIcon,
+  TableCellsIcon,
 } from '@/components/ui/Icons'
 
 interface NavItem {
@@ -33,6 +34,7 @@ const ALL_NAV_ITEMS: NavItem[] = [
   { to: '/field',          label: 'Field',           Icon: ClipboardIcon },
   { to: '/subcontractors', label: 'Subcontractors',  Icon: UsersIcon },
   { to: '/employees',      label: 'Employees',        Icon: UsersIcon },
+  { to: '/reports',        label: 'Reports',          Icon: TableCellsIcon },
   { to: '/ai',             label: 'AI Assistant',    Icon: SparklesIcon },
   { to: '/settings',       label: 'Settings',         Icon: GearIcon },
 ]
