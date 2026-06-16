@@ -142,13 +142,11 @@ function ClockEntriesPanel({
   tenantId: string
   projects: { id: string; job: { job_number?: string | null; job_name?: string | null } | null }[]
 }) {
-  const [filters, setFilters] = useState<Filters>({
-    from:      defaultFrom(),
-    to:        defaultTo(),
-    projectId: '',
-  })
-  const [triggered, setTriggered] = useState(false)
-  const [queryKey,  setQueryKey]  = useState(0)
+  // Pending = what the user is editing; runFilters = last committed on Run
+  const initFilters: Filters = { from: defaultFrom(), to: defaultTo(), projectId: '' }
+  const [pendingFilters, setPendingFilters] = useState<Filters>(initFilters)
+  const [runFilters,     setRunFilters]     = useState<Filters>(initFilters)
+  const [runCount,       setRunCount]       = useState(0)
 
   const projectMap = new Map(
     projects.map((p) => [
@@ -159,26 +157,35 @@ function ClockEntriesPanel({
     ]),
   )
 
+  // Query only fires when runCount > 0; changing pendingFilters has no effect
   const { data: rows = [], isFetching } = useQuery<ClockEntryReportRow[]>({
-    queryKey: ['report-clock-entries', tenantId, filters, queryKey],
+    queryKey: ['report-clock-entries', tenantId, runFilters, runCount],
     queryFn:  () =>
       getClockEntriesReport(supabase, tenantId, {
-        from:      filters.from,
-        to:        filters.to,
-        projectId: filters.projectId || undefined,
+        from:      runFilters.from,
+        to:        runFilters.to,
+        projectId: runFilters.projectId || undefined,
       }),
-    enabled: triggered,
-    staleTime: 0,
+    enabled:   runCount > 0,
+    staleTime: Infinity,
   })
 
   function run() {
-    setTriggered(true)
-    setQueryKey((k) => k + 1)
+    setRunFilters({ ...pendingFilters })
+    setRunCount((c) => c + 1)
   }
+
+  // Totals
+  const totalNetHrs  = rows.reduce((s, r) => s + (r.netHours ?? 0), 0)
+  const totalOtHrs   = rows.reduce((s, r) => s + (r.ot15Hours ?? 0) + (r.ot20Hours ?? 0), 0)
+  const totalMiles   = rows.reduce((s, r) => s + (r.mileageMiles ?? 0), 0)
+  const totalCost    = rows.reduce((s, r) => s + (r.laborCostCents ?? 0), 0)
+  const hasCosts     = rows.some((r) => r.laborCostCents != null)
+  const hasMileage   = rows.some((r) => r.mileageMiles != null)
 
   function exportRows() {
     exportCsv(
-      `clock-entries-${filters.from}-to-${filters.to}.csv`,
+      `clock-entries-${runFilters.from}-to-${runFilters.to}.csv`,
       ['Worker', 'Project', 'Date', 'Clock In', 'Clock Out', 'Break (min)', 'Auto Lunch', 'Net Hours', 'Regular', 'OT 1.5×', 'OT 2×', 'Mileage', 'Labor Cost', 'Notes', 'Status'],
       rows.map((r) => [
         r.workerName,
@@ -205,21 +212,21 @@ function ClockEntriesPanel({
       <div className="px-6 py-5 border-b border-gray-100">
         <h2 className="text-base font-semibold text-gray-900">Clock Entries</h2>
         <p className="mt-0.5 text-sm text-gray-500">
-          Individual time sessions with hours, OT breakdown, and labor cost.
+          Individual time sessions with hours, OT breakdown, mileage, and labor cost.
         </p>
       </div>
 
       <div className="px-6 py-5 border-b border-gray-100">
         <FilterBar
-          filters={filters}
-          onChange={setFilters}
+          filters={pendingFilters}
+          onChange={setPendingFilters}
           projects={projects}
           onRun={run}
           running={isFetching}
         />
       </div>
 
-      {triggered && (
+      {runCount > 0 && (
         <div className="px-6 py-5">
           {isFetching ? (
             <div className="space-y-2">
@@ -243,7 +250,7 @@ function ClockEntriesPanel({
                 <table className="min-w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100 bg-gray-50">
-                      {['Worker', 'Project', 'Date', 'In', 'Out', 'Break', 'Net Hrs', 'OT Hrs', 'Cost'].map((h) => (
+                      {['Worker', 'Project', 'Date', 'In', 'Out', 'Break', 'Net Hrs', 'OT Hrs', 'Mileage', 'Cost'].map((h) => (
                         <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-500 whitespace-nowrap first:pl-6 last:pr-6">
                           {h}
                         </th>
@@ -270,11 +277,35 @@ function ClockEntriesPanel({
                               ? <span className="text-amber-600 font-medium">{fmtHours(otHrs)}</span>
                               : <span className="text-gray-400">—</span>}
                           </td>
+                          <td className="px-4 py-3 text-gray-600 whitespace-nowrap tabular-nums">
+                            {r.mileageMiles != null ? `${r.mileageMiles} mi` : <span className="text-gray-400">—</span>}
+                          </td>
                           <td className="px-4 py-3 text-gray-700 whitespace-nowrap tabular-nums pr-6">{fmtMoney(r.laborCostCents)}</td>
                         </tr>
                       )
                     })}
                   </tbody>
+                  <tfoot>
+                    <tr className="border-t-2 border-gray-200 bg-gray-50">
+                      <td className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide pl-6" colSpan={6}>
+                        Total ({rows.length} sessions)
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-gray-900 tabular-nums whitespace-nowrap">{fmtHours(totalNetHrs)}</td>
+                      <td className="px-4 py-3 tabular-nums whitespace-nowrap">
+                        {totalOtHrs > 0
+                          ? <span className="font-semibold text-amber-600">{fmtHours(totalOtHrs)}</span>
+                          : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-gray-900 tabular-nums whitespace-nowrap">
+                        {hasMileage ? `${totalMiles.toFixed(1)} mi` : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-4 py-3 tabular-nums whitespace-nowrap pr-6">
+                        {hasCosts
+                          ? <span className="font-semibold text-gray-900">{fmtMoney(totalCost)}</span>
+                          : <span className="text-gray-400">—</span>}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             </>
@@ -294,37 +325,35 @@ function LaborSummaryPanel({
   tenantId: string
   projects: { id: string; job: { job_number?: string | null; job_name?: string | null } | null }[]
 }) {
-  const [filters, setFilters] = useState<Filters>({
-    from:      defaultFrom(),
-    to:        defaultTo(),
-    projectId: '',
-  })
-  const [triggered, setTriggered] = useState(false)
-  const [queryKey,  setQueryKey]  = useState(0)
+  const initFilters: Filters = { from: defaultFrom(), to: defaultTo(), projectId: '' }
+  const [pendingFilters, setPendingFilters] = useState<Filters>(initFilters)
+  const [runFilters,     setRunFilters]     = useState<Filters>(initFilters)
+  const [runCount,       setRunCount]       = useState(0)
 
   const { data: rows = [], isFetching } = useQuery<LaborSummaryReportRow[]>({
-    queryKey: ['report-labor-summary', tenantId, filters, queryKey],
+    queryKey: ['report-labor-summary', tenantId, runFilters, runCount],
     queryFn:  () =>
       getLaborCostSummaryReport(supabase, tenantId, {
-        from:      filters.from,
-        to:        filters.to,
-        projectId: filters.projectId || undefined,
+        from:      runFilters.from,
+        to:        runFilters.to,
+        projectId: runFilters.projectId || undefined,
       }),
-    enabled: triggered,
-    staleTime: 0,
+    enabled:   runCount > 0,
+    staleTime: Infinity,
   })
 
   function run() {
-    setTriggered(true)
-    setQueryKey((k) => k + 1)
+    setRunFilters({ ...pendingFilters })
+    setRunCount((c) => c + 1)
   }
 
-  function exportRows() {
-    const totalHrs  = rows.reduce((s, r) => s + r.totalNetHours, 0)
-    const totalCost = rows.reduce((s, r) => s + (r.totalLaborCostCents ?? 0), 0)
+  const totalHrs  = rows.reduce((s, r) => s + r.totalNetHours, 0)
+  const totalCost = rows.reduce((s, r) => s + (r.totalLaborCostCents ?? 0), 0)
+  const hasCosts  = rows.some((r) => r.totalLaborCostCents != null)
 
+  function exportRows() {
     exportCsv(
-      `labor-summary-${filters.from}-to-${filters.to}.csv`,
+      `labor-summary-${runFilters.from}-to-${runFilters.to}.csv`,
       ['Worker', 'Sessions', 'Total Hours', 'Regular', 'OT 1.5×', 'OT 2×', 'Mileage (mi)', 'Total Cost'],
       [
         ...rows.map((r) => [
@@ -337,7 +366,6 @@ function LaborSummaryPanel({
           r.totalMileageMiles.toFixed(1),
           r.totalLaborCostCents != null ? (r.totalLaborCostCents / 100).toFixed(2) : '',
         ]),
-        // Totals row
         ['TOTAL', rows.reduce((s, r) => s + r.sessionCount, 0), totalHrs.toFixed(2),
          rows.reduce((s, r) => s + r.regularHours, 0).toFixed(2),
          rows.reduce((s, r) => s + r.ot15Hours, 0).toFixed(2),
@@ -347,10 +375,6 @@ function LaborSummaryPanel({
       ],
     )
   }
-
-  const totalHrs  = rows.reduce((s, r) => s + r.totalNetHours, 0)
-  const totalCost = rows.reduce((s, r) => s + (r.totalLaborCostCents ?? 0), 0)
-  const hasCosts  = rows.some((r) => r.totalLaborCostCents != null)
 
   return (
     <section className="rounded-2xl border border-gray-200 bg-white overflow-hidden">
@@ -363,15 +387,15 @@ function LaborSummaryPanel({
 
       <div className="px-6 py-5 border-b border-gray-100">
         <FilterBar
-          filters={filters}
-          onChange={setFilters}
+          filters={pendingFilters}
+          onChange={setPendingFilters}
           projects={projects}
           onRun={run}
           running={isFetching}
         />
       </div>
 
-      {triggered && (
+      {runCount > 0 && (
         <div className="px-6 py-5">
           {isFetching ? (
             <div className="space-y-2">
@@ -426,7 +450,6 @@ function LaborSummaryPanel({
                       </tr>
                     ))}
                   </tbody>
-                  {/* Totals footer */}
                   <tfoot>
                     <tr className="border-t-2 border-gray-200 bg-gray-50">
                       <td className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide pl-6">Total</td>
