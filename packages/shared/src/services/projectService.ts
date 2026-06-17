@@ -2852,6 +2852,25 @@ export async function updateEmployee(
   await Promise.all(tasks)
 }
 
+// ── PM Change Order Approval (audited) ────────────────────────────────────
+
+/**
+ * Approves a change order via the pm_approve_change_order() security-definer
+ * RPC, which stamps approved_at + approved_by_user_id and writes to audit_log.
+ * Use this instead of a raw co_status='approved' update so every approval
+ * has a full audit trail with who approved it.
+ */
+export async function pmApproveChangeOrder(
+  client: SupabaseClient,
+  coId: string,
+): Promise<void> {
+  const { error } = await client.rpc(
+    'pm_approve_change_order',
+    { p_co_id: coId } as unknown as never,
+  )
+  if (error) throw error
+}
+
 // ── PM Selections ───────────────────────────────────────────────────────────
 
 export interface PMSelectionOption {

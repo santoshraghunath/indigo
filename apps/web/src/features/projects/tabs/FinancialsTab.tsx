@@ -17,6 +17,7 @@ import {
   formatMoney,
   createChangeOrder,
   updateChangeOrder,
+  pmApproveChangeOrder,
   withdrawChangeOrder,
   createDrawSchedule,
   createDrawRequest,
@@ -350,19 +351,28 @@ function EditCOModal({
   const [errors,         setErrors]         = useState<Record<string, string>>({})
 
   const mutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      const isApproving = coStatus === 'approved' && co.co_status !== 'approved'
+
+      // Save all editable fields. When approving, keep the pre-approval status
+      // here so the RPC below is the single source that stamps approved_at,
+      // approved_by_user_id, and writes to audit_log.
       const input: UpdateChangeOrderInput = {
         co_number:            coNumber.trim(),
         title:                title.trim() || null,
         description:          description.trim() || null,
         amount_cents:         parseDollars(amountStr),
-        co_status:            coStatus,
+        co_status:            isApproving ? (co.co_status ?? 'draft') : coStatus,
         date_submitted:       dateSubmitted || null,
         schedule_impact_days: scheduleImpact ? parseInt(scheduleImpact, 10) : null,
         reason:               reason.trim() || null,
         notes:                notes.trim() || null,
       }
-      return updateChangeOrder(supabase, co.id, input)
+      await updateChangeOrder(supabase, co.id, input)
+
+      if (isApproving) {
+        await pmApproveChangeOrder(supabase, co.id)
+      }
     },
     onSuccess: () => {
       toast.success('Change order updated')
