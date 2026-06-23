@@ -19,9 +19,20 @@ alter table tenant_branding enable row level security;
 create policy "tenant members select branding" on tenant_branding
   for select using (tenant_id in (select get_user_tenant_ids()));
 
--- Only owners/admins can modify branding (enforced in app layer too)
-create policy "tenant members upsert branding" on tenant_branding
-  for all using (tenant_id in (select get_user_tenant_ids()));
+-- Separate INSERT / UPDATE / DELETE policies — FOR ALL with only USING
+-- does not reliably provide WITH CHECK for INSERT in PostgREST.
+create policy "tenant members insert branding" on tenant_branding
+  for insert
+  with check (tenant_id in (select get_user_tenant_ids()));
+
+create policy "tenant members update branding" on tenant_branding
+  for update
+  using  (tenant_id in (select get_user_tenant_ids()))
+  with check (tenant_id in (select get_user_tenant_ids()));
+
+create policy "tenant members delete branding" on tenant_branding
+  for delete
+  using (tenant_id in (select get_user_tenant_ids()));
 
 -- ── Supabase Storage bucket ───────────────────────────────────────────────────
 -- Public read so PDF renderer can fetch the logo URL directly.
