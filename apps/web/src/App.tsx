@@ -46,21 +46,21 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   if (isLoading) return null          // session check in-flight — hold position
   if (user === null) return <Navigate to="/login" replace />
 
-  // Show "No access" only once ALL three are true:
-  //   1. profile has loaded (so we're past the initial auth window)
-  //   2. the memberships query has actually completed (hasFetchedMemberships)
-  //   3. the result was empty
-  // Without check 2 we'd briefly show this screen in the race window between
-  // profile loading and the memberships query returning — most visible for
-  // newly invited users on their first sign-in.
-  if (profile !== null && hasFetchedMemberships && tenantMemberships.length === 0) {
+  // Wait for the memberships query to complete before showing "No access".
+  // Without this, we'd briefly show this screen during the race window on
+  // first sign-in before the memberships query returns.
+  if (hasFetchedMemberships && tenantMemberships.length === 0) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4">
         <div className="max-w-sm text-center">
           <div className="text-4xl">🔒</div>
           <h2 className="mt-4 text-base font-semibold text-gray-900">No access</h2>
           <p className="mt-2 text-sm text-gray-500">
-            Your account doesn't have access to any workspace. Contact your administrator.
+            Your account doesn't have access to any workspace. If you're a client,{' '}
+            <a href="/portal" className="text-indigo-600 underline">
+              use the client portal
+            </a>{' '}
+            instead. Otherwise, contact your administrator.
           </p>
         </div>
       </div>
