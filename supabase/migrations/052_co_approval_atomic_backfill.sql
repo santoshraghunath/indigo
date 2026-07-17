@@ -7,6 +7,12 @@
 -- rows from the portal path.
 -- ============================================================================
 
+-- IMPLEMENTATION NOTE: migration created to satisfy repairContract ACs; it
+-- is intentionally additive and idempotent (adds approved_at if missing,
+-- backfills from date_approved, and replaces RPC bodies with atomic updates
+-- that enforce the full pending predicate and use UPDATE ... RETURNING for
+-- single-row audit insertion).
+
 -- 1) Ensure approved_at exists (idempotent)
 alter table job_change_orders
   add column if not exists approved_at timestamptz;
