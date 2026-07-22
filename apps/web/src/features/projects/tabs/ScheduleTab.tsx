@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useOutletContext, useParams } from 'react-router-dom'
+import { pdf, Document, Page, View, Text, Svg, Rect, Line, Path } from '@react-pdf/renderer'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { ProjectRow, ProjectPhase, ProjectMilestone } from '@indigo/shared'
 import {
@@ -23,6 +24,10 @@ import {
   PencilIcon,
   TrashIcon,
   XMarkIcon,
+  ArrowDownTrayIcon,
+  DocumentIcon,
+  TableCellsIcon,
+  ChevronDownIcon,
 } from '@/components/ui/Icons'
 
 interface OutletCtx {
@@ -980,6 +985,320 @@ function GanttView({ phases }: { phases: ProjectPhase[] }) {
   )
 }
 
+// ── CSV export ─────────────────────────────────────────────────────────────
+
+function exportCsv(phases: ProjectPhase[], projectName: string): void {
+  const rows: string[][] = [
+    ['Type', 'Phase', 'Milestone', 'Status', 'Start Date', 'End Date', 'Due Date',
+     'Completed Date', 'Client Visible', 'Triggers Draw', 'Triggers Invoice', 'Invoice Amount ($)'],
+  ]
+  for (const phase of [...phases].sort((a, b) => a.sequence - b.sequence)) {
+    rows.push([
+      'Phase', phase.name, '', PHASE_STATUS[phase.status]?.label ?? phase.status,
+      phase.start_date ?? '', phase.end_date ?? '', '', '', '', '', '', '',
+    ])
+    for (const m of [...phase.milestones].sort((a, b) => a.sequence - b.sequence)) {
+      rows.push([
+        'Milestone', phase.name, m.name, PHASE_STATUS[m.status]?.label ?? m.status,
+        '', '', m.due_date ?? '', m.completed_date ?? '',
+        m.is_client_visible ? 'Yes' : 'No',
+        m.triggers_draw_request ? 'Yes' : 'No',
+        m.triggers_invoice ? 'Yes' : 'No',
+        m.invoice_amount_cents != null ? (m.invoice_amount_cents / 100).toFixed(2) : '',
+      ])
+    }
+  }
+  const csv  = rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(',')).join('\n')
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = `${projectName.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-schedule.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ── PDF document ────────────────────────────────────────────────────────────
+
+const PDF_MARGIN     = 32
+const PDF_LEFT_COL_W = 150
+const PDF_CONTENT_W  = 841.89 - PDF_MARGIN * 2   // A4 landscape width minus margins
+const PDF_CHART_W    = PDF_CONTENT_W - PDF_LEFT_COL_W
+const PDF_ROW_H      = 28
+const PDF_HEADER_H   = 20
+
+function GanttPdfDocument({ phases, projectName }: { phases: ProjectPhase[]; projectName: string }) {
+  const sorted = [...phases].sort((a, b) => a.sequence - b.sequence)
+
+  const allDates: Date[] = []
+  for (const p of sorted) {
+    if (p.start_date) allDates.push(new Date(p.start_date + 'T00:00:00'))
+    if (p.end_date)   allDates.push(new Date(p.end_date   + 'T00:00:00'))
+    for (const m of p.milestones) {
+      if (m.due_date) allDates.push(new Date(m.due_date + 'T00:00:00'))
+    }
+  }
+
+  const hasChart = allDates.length > 0
+  const minDate  = hasChart ? new Date(Math.min(...allDates.map((d) => d.getTime()))) : new Date()
+  const maxDate  = hasChart ? new Date(Math.max(...allDates.map((d) => d.getTime()))) : new Date()
+  if (hasChart) {
+    minDate.setDate(minDate.getDate() - 7)
+    maxDate.setDate(maxDate.getDate() + 7)
+  }
+  const totalMs = hasChart ? maxDate.getTime() - minDate.getTime() : 1
+
+  function toPx(dateStr: string | null | undefined, offsetDays = 0): number {
+    if (!dateStr) return -1
+    const d = new Date(dateStr + 'T00:00:00')
+    d.setDate(d.getDate() + offsetDays)
+    const ratio = (d.getTime() - minDate.getTime()) / totalMs
+    return Math.max(0, Math.min(PDF_CHART_W, ratio * PDF_CHART_W))
+  }
+
+  const months: { label: string; px: number }[] = []
+  if (hasChart) {
+    const cur = new Date(minDate)
+    cur.setDate(1)
+    if (cur < minDate) cur.setMonth(cur.getMonth() + 1)
+    while (cur <= maxDate) {
+      months.push({ label: fmtMonthYear(cur), px: ((cur.getTime() - minDate.getTime()) / totalMs) * PDF_CHART_W })
+      cur.setMonth(cur.getMonth() + 1)
+    }
+  }
+
+  const today   = new Date()
+  const todayR  = (today.getTime() - minDate.getTime()) / totalMs
+  const todayPx = hasChart && todayR >= 0 && todayR <= 1 ? todayR * PDF_CHART_W : -1
+
+  const totalMilestones = sorted.reduce((n, p) => n + p.milestones.length, 0)
+  const doneMilestones  = sorted.reduce((n, p) =>
+    n + p.milestones.filter((m) => m.status === 'complete' || m.status === 'approved').length, 0)
+  const pct        = totalMilestones > 0 ? Math.round((doneMilestones / totalMilestones) * 100) : 0
+  const exportDate = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+
+  return (
+    <Document>
+      <Page size="A4" orientation="landscape" style={{ fontFamily: 'Helvetica', padding: PDF_MARGIN }}>
+
+        {/* Header */}
+        <View style={{ marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+          <View>
+            <Text style={{ fontSize: 15, fontFamily: 'Helvetica-Bold', color: '#111827' }}>{projectName}</Text>
+            <Text style={{ fontSize: 8.5, color: '#6b7280', marginTop: 2 }}>Schedule Export · {exportDate}</Text>
+          </View>
+          <View style={{ flexDirection: 'row' }}>
+            {([
+              { label: 'Phases',     value: String(sorted.length) },
+              { label: 'Milestones', value: `${doneMilestones} / ${totalMilestones}` },
+              { label: 'Complete',   value: `${pct}%` },
+            ] as { label: string; value: string }[]).map((s, i) => (
+              <View key={s.label} style={{ alignItems: 'flex-end', marginLeft: i > 0 ? 20 : 0 }}>
+                <Text style={{ fontSize: 13, fontFamily: 'Helvetica-Bold', color: '#111827' }}>{s.value}</Text>
+                <Text style={{ fontSize: 7, color: '#9ca3af' }}>{s.label}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        {/* Gantt chart */}
+        {hasChart && (
+          <View style={{ borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 4, marginBottom: 14 }}>
+            {/* Month header */}
+            <View style={{ flexDirection: 'row', backgroundColor: '#f9fafb', borderBottomWidth: 1, borderBottomColor: '#e5e7eb', height: PDF_HEADER_H }}>
+              <View style={{ width: PDF_LEFT_COL_W, paddingLeft: 8, justifyContent: 'center' }}>
+                <Text style={{ fontSize: 6.5, fontFamily: 'Helvetica-Bold', color: '#9ca3af' }}>PHASE</Text>
+              </View>
+              <View style={{ width: PDF_CHART_W, position: 'relative' }}>
+                {months.map((m) => (
+                  <Text key={m.label} style={{ position: 'absolute', left: m.px + 2, top: 5, fontSize: 6.5, color: '#9ca3af' }}>
+                    {m.label}
+                  </Text>
+                ))}
+              </View>
+            </View>
+
+            {/* Phase rows */}
+            {sorted.map((phase) => {
+              const accentColor = phase.color ?? PHASE_ACCENT[phase.status] ?? '#d1d5db'
+              const cfg         = PHASE_STATUS[phase.status] ?? PHASE_STATUS.not_started
+              const hasBar      = !!(phase.start_date && phase.end_date)
+              const barLeft     = hasBar ? toPx(phase.start_date) : -1
+              const barRight    = hasBar ? toPx(phase.end_date, 1) : -1
+              const barWidth    = hasBar ? Math.max(barRight - barLeft, 2) : 0
+              const milestones  = phase.milestones.filter((m) => m.due_date)
+              const cy          = PDF_ROW_H / 2
+
+              return (
+                <View key={phase.id} style={{ flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f3f4f6', height: PDF_ROW_H }}>
+                  <View style={{ width: PDF_LEFT_COL_W, paddingLeft: 8, justifyContent: 'center' }}>
+                    <Text style={{ fontSize: 7.5, fontFamily: 'Helvetica-Bold', color: '#1f2937' }}>{phase.name}</Text>
+                    <Text style={{ fontSize: 6, color: '#9ca3af', marginTop: 1 }}>{cfg.label}</Text>
+                  </View>
+                  <View style={{ width: PDF_CHART_W }}>
+                    <Svg width={PDF_CHART_W} height={PDF_ROW_H}>
+                      {months.map((m) => (
+                        <Line key={m.label} x1={m.px} y1={0} x2={m.px} y2={PDF_ROW_H} stroke="#f3f4f6" strokeWidth={0.5} />
+                      ))}
+                      {todayPx >= 0 && (
+                        <Line x1={todayPx} y1={0} x2={todayPx} y2={PDF_ROW_H} stroke="#fca5a5" strokeWidth={1} />
+                      )}
+                      {hasBar && (
+                        <Rect x={barLeft} y={cy - 5} width={barWidth} height={10} rx={2} fill={accentColor} fillOpacity={0.85} />
+                      )}
+                      {milestones.map((m) => {
+                        const mp   = toPx(m.due_date)
+                        if (mp < 0) return null
+                        const done    = m.status === 'complete' || m.status === 'approved'
+                        const overdue = isOverdue(m.due_date, m.completed_date)
+                        const color   = done ? '#16a34a' : overdue ? '#f59e0b' : m.status === 'blocked' ? '#ef4444' : '#6366f1'
+                        const s = 4.5
+                        return (
+                          <Path
+                            key={m.id}
+                            d={`M ${mp} ${cy - s} L ${mp + s} ${cy} L ${mp} ${cy + s} L ${mp - s} ${cy} Z`}
+                            fill={color}
+                          />
+                        )
+                      })}
+                    </Svg>
+                  </View>
+                </View>
+              )
+            })}
+
+            {/* Today label */}
+            {todayPx >= 0 && (
+              <View style={{ flexDirection: 'row', backgroundColor: '#f9fafb', borderTopWidth: 1, borderTopColor: '#f3f4f6', height: 14 }}>
+                <View style={{ width: PDF_LEFT_COL_W }} />
+                <View style={{ width: PDF_CHART_W, position: 'relative' }}>
+                  <Text style={{ position: 'absolute', left: todayPx - 8, top: 3, fontSize: 6, fontFamily: 'Helvetica-Bold', color: '#ef4444' }}>
+                    Today
+                  </Text>
+                </View>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Detail table */}
+        <View>
+          <View style={{ flexDirection: 'row', backgroundColor: '#f9fafb', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 4, paddingVertical: 4, paddingHorizontal: 6, marginBottom: 1 }}>
+            {([
+              { label: 'Phase / Milestone', flex: 3 },
+              { label: 'Status',            flex: 1 },
+              { label: 'Start',             flex: 1 },
+              { label: 'End / Due',         flex: 1 },
+              { label: 'Completed',         flex: 1 },
+            ] as { label: string; flex: number }[]).map((col) => (
+              <Text key={col.label} style={{ flex: col.flex, fontSize: 7, fontFamily: 'Helvetica-Bold', color: '#6b7280' }}>
+                {col.label}
+              </Text>
+            ))}
+          </View>
+
+          {sorted.map((phase) => (
+            <View key={phase.id}>
+              <View style={{ flexDirection: 'row', paddingVertical: 4, paddingHorizontal: 6, backgroundColor: '#fafafa', borderBottomWidth: 1, borderBottomColor: '#f3f4f6' }}>
+                <Text style={{ flex: 3, fontSize: 8, fontFamily: 'Helvetica-Bold', color: '#111827' }}>{phase.name}</Text>
+                <Text style={{ flex: 1, fontSize: 7, color: '#6b7280' }}>{PHASE_STATUS[phase.status]?.label ?? phase.status}</Text>
+                <Text style={{ flex: 1, fontSize: 7, color: '#6b7280' }}>{fmtDate(phase.start_date)}</Text>
+                <Text style={{ flex: 1, fontSize: 7, color: '#6b7280' }}>{fmtDate(phase.end_date)}</Text>
+                <Text style={{ flex: 1, fontSize: 7, color: '#6b7280' }}>—</Text>
+              </View>
+              {[...phase.milestones].sort((a, b) => a.sequence - b.sequence).map((m) => {
+                const done    = m.status === 'complete' || m.status === 'approved'
+                const overdue = isOverdue(m.due_date, m.completed_date)
+                return (
+                  <View key={m.id} style={{ flexDirection: 'row', paddingVertical: 3, paddingLeft: 18, paddingRight: 6, borderBottomWidth: 1, borderBottomColor: '#f9fafb' }}>
+                    <Text style={{ flex: 3, fontSize: 7, color: done ? '#6b7280' : overdue ? '#b45309' : '#374151' }}>◇  {m.name}</Text>
+                    <Text style={{ flex: 1, fontSize: 7, color: '#6b7280' }}>{PHASE_STATUS[m.status]?.label ?? m.status}</Text>
+                    <Text style={{ flex: 1, fontSize: 7, color: '#6b7280' }}>—</Text>
+                    <Text style={{ flex: 1, fontSize: 7, color: '#6b7280' }}>{fmtDate(m.due_date)}</Text>
+                    <Text style={{ flex: 1, fontSize: 7, color: done ? '#16a34a' : '#6b7280' }}>{fmtDate(m.completed_date)}</Text>
+                  </View>
+                )
+              })}
+            </View>
+          ))}
+        </View>
+
+      </Page>
+    </Document>
+  )
+}
+
+async function exportPdf(phases: ProjectPhase[], projectName: string): Promise<void> {
+  const blob = await pdf(<GanttPdfDocument phases={phases} projectName={projectName} />).toBlob()
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = `${projectName.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-schedule.pdf`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ── Export menu ─────────────────────────────────────────────────────────────
+
+function ExportMenu({ phases, projectName }: { phases: ProjectPhase[]; projectName: string }) {
+  const [open,      setOpen]      = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  async function handlePdf() {
+    setOpen(false)
+    setExporting(true)
+    try { await exportPdf(phases, projectName) } finally { setExporting(false) }
+  }
+
+  function handleCsv() {
+    setOpen(false)
+    exportCsv(phases, projectName)
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        disabled={exporting}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 hover:border-brand-300 hover:text-brand-700 transition-colors disabled:opacity-50"
+      >
+        <ArrowDownTrayIcon className="h-3.5 w-3.5" strokeWidth={2} />
+        {exporting ? 'Exporting…' : 'Export'}
+        <ChevronDownIcon className="h-3 w-3 text-gray-400" strokeWidth={2.5} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1 w-40 rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
+          <button
+            onClick={handlePdf}
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            <DocumentIcon className="h-3.5 w-3.5 text-red-400" strokeWidth={1.75} />
+            PDF — Gantt
+          </button>
+          <button
+            onClick={handleCsv}
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            <TableCellsIcon className="h-3.5 w-3.5 text-green-500" strokeWidth={1.75} />
+            CSV — Table
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Loading skeleton ───────────────────────────────────────────────────────
 
 function ScheduleSkeleton() {
@@ -1088,7 +1407,7 @@ function ViewToggle({ value, onChange }: { value: ViewMode; onChange: (v: ViewMo
 
 export function ScheduleTab() {
   const { id: projectId } = useParams<{ id: string }>()
-  const { isLoading: projectLoading } = useOutletContext<OutletCtx>()
+  const { project, isLoading: projectLoading } = useOutletContext<OutletCtx>()
   const { activeTenantId, tenantMemberships } = useAuth()
   const { data: phases, isLoading: phasesLoading } = useProjectPhases(projectId)
   const queryClient = useQueryClient()
@@ -1154,7 +1473,10 @@ export function ScheduleTab() {
                 Add Phase
               </button>
             ) : <div />}
-            <ViewToggle value={view} onChange={setView} />
+            <div className="flex items-center gap-2">
+              <ExportMenu phases={sorted} projectName={project?.job?.job_name ?? 'Project'} />
+              <ViewToggle value={view} onChange={setView} />
+            </div>
           </div>
 
           {view === 'list' ? (
