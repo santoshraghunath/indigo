@@ -1,13 +1,24 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useOutletContext, useParams } from 'react-router-dom'
-import type { ProjectRow, ProjectDocument } from '@indigo/shared'
+import {
+  getProjectDocumentDownload,
+  uploadProjectDocument,
+  type ProjectRow,
+  type ProjectDocument,
+} from '@indigo/shared'
 import { useProjectDocuments } from '../useProject'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/hooks/useAuth'
+import { useToast } from '@/stores/toastStore'
 
 interface OutletCtx {
   project: ProjectRow | undefined
   isLoading: boolean
 }
+
+const MAX_PROJECT_DOCUMENT_SIZE_BYTES = 25 * 1024 * 1024
 
 // ── Document type config ───────────────────────────────────────────────────
 
@@ -104,7 +115,25 @@ function CategoryTile({
 
 // ── Document row ───────────────────────────────────────────────────────────
 
-function DocumentRow({ doc }: { doc: ProjectDocument }) {
+function triggerDownload(url: string, fileName: string) {
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  link.rel = 'noreferrer'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
+
+function DocumentRow({
+  doc,
+  onDownload,
+  isDownloading,
+}: {
+  doc: ProjectDocument
+  onDownload: (doc: ProjectDocument) => void
+  isDownloading: boolean
+}) {
   return (
     <div className="flex items-center gap-3 px-5 py-3 hover:bg-gray-50 transition-colors">
       <span className="shrink-0 text-xl leading-none">{mimeIcon(doc.mime_type)}</span>
@@ -133,26 +162,186 @@ function DocumentRow({ doc }: { doc: ProjectDocument }) {
           ))}
         </div>
       )}
+      <button
+        type="button"
+        onClick={() => onDownload(doc)}
+        disabled={isDownloading}
+        className="shrink-0 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-60"
+        aria-label={`Download ${doc.name}`}
+      >
+        {isDownloading ? 'Downloading…' : 'Download'}
+      </button>
     </div>
   )
 }
 
-// ── Upload placeholder button ──────────────────────────────────────────────
+function UploadPanel({
+  projectId,
+  tenantId,
+  userId,
+  onUploaded,
+}: {
+  projectId: string
+  tenantId: string
+  userId: string
+  onUploaded: () => void
+}) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [type, setType] = useState<DocType>('other')
+  const [description, setDescription] = useState('')
+  const [isClientVisible, setIsClientVisible] = useState(false)
+  const [file, setFile] = useState<File | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-function UploadPlaceholder() {
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!file) {
+        throw new Error('Choose a file to upload.')
+      }
+      if (file.size === 0) {
+        throw new Error('Choose a non-empty file.')
+      }
+      if (file.size > MAX_PROJECT_DOCUMENT_SIZE_BYTES) {
+        throw new Error('Choose a file smaller than or equal to 25 MB.')
+      }
+
+      return uploadProjectDocument(supabase, tenantId, projectId, userId, file, {
+        type,
+        description,
+        isClientVisible,
+      })
+    },
+    onSuccess: async () => {
+      setType('other')
+      setDescription('')
+      setIsClientVisible(false)
+      setFile(null)
+      setError(null)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+      await queryClient.invalidateQueries({ queryKey: ['project-documents', projectId] })
+      onUploaded()
+      toast.success('Document uploaded')
+    },
+    onError: (uploadError: Error) => {
+      setError(uploadError.message)
+      toast.error(uploadError.message)
+    },
+  })
+
+  return (
+    <form
+      className="rounded-xl border border-gray-200 bg-white p-5 shadow-card"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (uploadMutation.isPending) {
+          return
+        }
+        setError(null)
+        uploadMutation.mutate()
+      }}
+      aria-describedby="project-document-upload-help"
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-gray-100 pb-4">
+        <div>
+          <h2 className="text-sm font-semibold text-gray-900">Upload document</h2>
+          <p id="project-document-upload-help" className="mt-1 text-xs text-gray-500">
+            Add a tenant-scoped file up to 25 MB.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        <label className="block text-sm">
+          <span className="mb-1 block font-medium text-gray-700">Category</span>
+          <select
+            value={type}
+            onChange={(event) => setType(event.target.value as DocType)}
+            disabled={uploadMutation.isPending}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900"
+          >
+            {ALL_TYPES.map((docType) => (
+              <option key={docType} value={docType}>
+                {DOC_TYPES[docType].label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block text-sm">
+          <span className="mb-1 block font-medium text-gray-700">File</span>
+          <input
+            ref={fileInputRef}
+            type="file"
+            onChange={(event) => {
+              setError(null)
+              setFile(event.target.files?.[0] ?? null)
+            }}
+            disabled={uploadMutation.isPending}
+            className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900"
+            aria-describedby={error ? 'project-document-upload-error' : undefined}
+          />
+        </label>
+
+        <label className="block text-sm md:col-span-2">
+          <span className="mb-1 block font-medium text-gray-700">Description</span>
+          <textarea
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            rows={3}
+            disabled={uploadMutation.isPending}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900"
+            placeholder="Optional description"
+          />
+        </label>
+
+        <label className="flex items-center gap-3 text-sm text-gray-700 md:col-span-2">
+          <input
+            type="checkbox"
+            checked={isClientVisible}
+            onChange={(event) => setIsClientVisible(event.target.checked)}
+            disabled={uploadMutation.isPending}
+            className="h-4 w-4 rounded border-gray-300"
+          />
+          <span>Visible to client portal users</span>
+        </label>
+      </div>
+
+      {file && (
+        <p className="mt-3 text-xs text-gray-500">
+          Selected: {file.name}{file.size ? ` · ${fmtBytes(file.size)}` : ''}
+        </p>
+      )}
+
+      {error && (
+        <p id="project-document-upload-error" className="mt-3 text-sm text-red-600" role="alert">
+          {error}
+        </p>
+      )}
+
+      <div className="mt-4 flex justify-end">
+        <button
+          type="submit"
+          disabled={uploadMutation.isPending}
+          className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
+          aria-busy={uploadMutation.isPending}
+        >
+          {uploadMutation.isPending ? 'Uploading…' : 'Upload document'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+function EmptyState() {
   return (
     <div className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-200 bg-white py-12 text-center">
-      <span className="text-3xl">📤</span>
-      <h3 className="mt-3 text-sm font-semibold text-gray-900">No files here yet</h3>
+      <span className="text-3xl">📄</span>
+      <h3 className="mt-3 text-sm font-semibold text-gray-900">No matching documents</h3>
       <p className="mt-1 max-w-xs text-sm text-gray-500">
-        Upload will be enabled in an upcoming release. Files stored here are version-controlled and available to your team.
+        Upload a project document or clear the current filter to browse existing files.
       </p>
-      <button
-        disabled
-        className="mt-4 cursor-not-allowed rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-sm font-medium text-gray-400"
-      >
-        Upload Files — Coming Soon
-      </button>
     </div>
   )
 }
@@ -193,10 +382,13 @@ const ALL_TYPES = Object.keys(DOC_TYPES) as DocType[]
 
 export function DocumentsTab() {
   const { id: projectId } = useParams<{ id: string }>()
-  const { isLoading: projectLoading } = useOutletContext<OutletCtx>()
+  const { isLoading: projectLoading, project } = useOutletContext<OutletCtx>()
+  const { activeTenantId, user } = useAuth()
+  const toast = useToast()
   const { data, isLoading: docsLoading } = useProjectDocuments(projectId)
 
   const [selectedType, setSelectedType] = useState<DocType | null>(null)
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
 
   const folders   = data?.folders   ?? []
   const documents = data?.documents ?? []
@@ -229,8 +421,30 @@ export function DocumentsTab() {
     ? DOC_TYPES[selectedType].label
     : 'All Documents'
 
+  async function handleDownload(doc: ProjectDocument) {
+    if (!activeTenantId || !projectId) return
+
+    setDownloadingId(doc.id)
+    try {
+      const download = await getProjectDocumentDownload(supabase, activeTenantId, projectId, doc.id)
+      triggerDownload(download.signedUrl, download.fileName)
+    } catch (downloadError) {
+      toast.error((downloadError as Error).message)
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+
   return (
     <div className="space-y-4 px-5 py-6 lg:px-8">
+      {projectId && activeTenantId && user?.id && project && (
+        <UploadPanel
+          projectId={projectId}
+          tenantId={activeTenantId}
+          userId={user.id}
+          onUploaded={() => setSelectedType(null)}
+        />
+      )}
 
       {/* Category tiles */}
       <div className="rounded-xl border border-gray-200 bg-white shadow-card">
@@ -275,12 +489,17 @@ export function DocumentsTab() {
 
         {filteredDocs.length === 0 ? (
           <div className="p-5">
-            <UploadPlaceholder />
+            <EmptyState />
           </div>
         ) : (
           <div className="divide-y divide-gray-100">
             {filteredDocs.map((doc) => (
-              <DocumentRow key={doc.id} doc={doc} />
+              <DocumentRow
+                key={doc.id}
+                doc={doc}
+                onDownload={handleDownload}
+                isDownloading={downloadingId === doc.id}
+              />
             ))}
           </div>
         )}

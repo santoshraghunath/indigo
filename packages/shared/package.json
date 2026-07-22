@@ -10,6 +10,7 @@
     "./types": "./src/types/index.ts"
   },
   "scripts": {
+    "test": "node --experimental-strip-types ./src/services/projectDocuments.regression.test.ts",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
