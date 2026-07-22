@@ -5,6 +5,7 @@ import {
   getPortalProjectData,
   getPortalSelections,
   getPortalPunchItems,
+  getPortalDocumentDownload,
   updatePortalPunchNotes,
   approvePortalMilestone,
   approvePortalChangeOrder,
@@ -47,6 +48,20 @@ function fmtBytes(n: number | null | undefined): string {
   if (!n) return ''
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function triggerDownload(url: string, fileName: string) {
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  link.rel = 'noreferrer'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
+
+function getPortalDocumentDownloadErrorMessage() {
+  return 'Unable to download document.'
 }
 
 function daysUntil(s: string | null | undefined): string {
@@ -1610,7 +1625,33 @@ function DocIcon({ type }: { type: string }) {
 
 void DOC_ICON // suppress unused warning
 
-function DocumentsTab({ documents }: { documents: PortalDocument[] }) {
+function DocumentsTab({
+  projectId,
+  documents,
+}: {
+  projectId: string
+  documents: PortalDocument[]
+}) {
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+  const downloadErrorId = 'portal-document-download-error'
+
+  async function handleDownload(documentId: string) {
+    if (downloadingId) return
+
+    setDownloadingId(documentId)
+    setDownloadError(null)
+
+    try {
+      const download = await getPortalDocumentDownload(supabase, projectId, documentId)
+      triggerDownload(download.signedUrl, download.fileName)
+    } catch {
+      setDownloadError(getPortalDocumentDownloadErrorMessage())
+    } finally {
+      setDownloadingId(null)
+    }
+  }
+
   if (documents.length === 0) {
     return (
       <div className="mt-12 text-center">
@@ -1621,7 +1662,16 @@ function DocumentsTab({ documents }: { documents: PortalDocument[] }) {
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="space-y-2">
+      {downloadError && (
+        <div
+          id={downloadErrorId}
+          className="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+          role="alert"
+        >
+          {downloadError}
+        </div>
+      )}
+      <div className="space-y-2" aria-busy={downloadingId !== null}>
         {documents.map((doc) => (
           <div key={doc.id} className="flex items-center gap-3 rounded-xl border border-gray-100 px-3 py-3">
             <DocIcon type={doc.type}/>
@@ -1632,6 +1682,15 @@ function DocumentsTab({ documents }: { documents: PortalDocument[] }) {
                 {doc.file_size_bytes ? ` · ${fmtBytes(doc.file_size_bytes)}` : ''}
               </p>
             </div>
+            <button
+              type="button"
+              onClick={() => handleDownload(doc.id)}
+              disabled={downloadingId !== null}
+              aria-describedby={downloadError ? downloadErrorId : undefined}
+              className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {downloadingId === doc.id ? 'Downloading…' : 'Download'}
+            </button>
           </div>
         ))}
       </div>
@@ -2020,7 +2079,7 @@ export function PortalProjectPage() {
       )}
 
       {activeTab === 'documents' && (
-        <DocumentsTab documents={documents}/>
+        <DocumentsTab projectId={project.id} documents={documents}/>
       )}
 
       {activeTab === 'selections' && (

@@ -1,0 +1,8 @@
+project_id = "indigo-project-documents"
+
+[db]
+port = 54332
+major_version = 15
+
+[api]
+enabled = true

@@ -75,6 +75,14 @@ export interface PortalDocument {
   created_at: string
 }
 
+const PORTAL_DOCUMENT_SIGNED_URL_EXPIRY = 3_600
+
+export interface PortalDocumentDownload {
+  documentId: string
+  fileName: string
+  signedUrl: string
+}
+
 export interface PortalDailyLog {
   id: string
   date: string
@@ -458,6 +466,47 @@ export async function getPortalProjectData(
     documents:    (docsRes.data      ?? []) as PortalDocument[],
     dailyLogs:    (logsRes.data      ?? []) as PortalDailyLog[],
     changeOrders: (cosRes.data       ?? []) as PortalChangeOrder[],
+  }
+}
+
+export async function getPortalDocumentDownload(
+  client: SupabaseClient,
+  projectId: string,
+  documentId: string,
+): Promise<PortalDocumentDownload> {
+  const { data: document, error: documentError } = await client
+    .from('documents')
+    .select('id, name, storage_bucket, storage_path')
+    .eq('id', documentId)
+    .eq('project_id', projectId)
+    .eq('is_client_visible', true)
+    .single()
+
+  if (documentError) throw documentError
+
+  const typedDocument = document as {
+    id: string
+    name: string
+    storage_bucket: string | null
+    storage_path: string | null
+  }
+
+  if (!typedDocument.storage_bucket || !typedDocument.storage_path) {
+    throw new Error('Document file is unavailable.')
+  }
+
+  const { data: signed, error: signError } = await client.storage
+    .from(typedDocument.storage_bucket)
+    .createSignedUrl(typedDocument.storage_path, PORTAL_DOCUMENT_SIGNED_URL_EXPIRY, {
+      download: typedDocument.name,
+    })
+
+  if (signError) throw signError
+
+  return {
+    documentId: typedDocument.id,
+    fileName: typedDocument.name,
+    signedUrl: signed.signedUrl,
   }
 }
 
