@@ -64,6 +64,8 @@ export interface ProjectMilestone {
   triggers_draw_request: boolean
   triggers_invoice: boolean
   invoice_amount_cents: number | null
+  predecessor_id: string | null
+  lag_days: number
 }
 
 export interface ProjectPhase {
@@ -368,7 +370,9 @@ export async function getProjectPhases(
         requires_client_approval,
         triggers_draw_request,
         triggers_invoice,
-        invoice_amount_cents
+        invoice_amount_cents,
+        predecessor_id,
+        lag_days
       )
     `)
     .eq('project_id', projectId)
@@ -1283,6 +1287,8 @@ export interface UpsertMilestoneInput {
   triggers_invoice: boolean
   /** Billing amount in cents for invoice-trigger milestones. */
   invoice_amount_cents?: number | null
+  predecessor_id?: string | null
+  lag_days?: number
 }
 
 export async function upsertMilestone(
@@ -1308,6 +1314,12 @@ export async function upsertMilestone(
         triggers_invoice:        input.triggers_invoice,
         ...(input.invoice_amount_cents !== undefined
           ? { invoice_amount_cents: input.invoice_amount_cents }
+          : {}),
+        ...(input.predecessor_id !== undefined
+          ? { predecessor_id: input.predecessor_id }
+          : {}),
+        ...(input.lag_days !== undefined
+          ? { lag_days: input.lag_days }
           : {}),
       } as unknown as never)
       .eq('id', input.id)
@@ -1335,11 +1347,77 @@ export async function upsertMilestone(
       triggers_draw_request:   input.triggers_draw_request,
       triggers_invoice:        input.triggers_invoice,
       invoice_amount_cents:    input.invoice_amount_cents ?? null,
+      predecessor_id:          input.predecessor_id ?? null,
+      lag_days:                input.lag_days ?? 0,
     } as unknown as never)
     .select('id')
     .single()
   if (error) throw error
   return data as { id: string }
+}
+
+// ── Milestone cascade ──────────────────────────────────────────────────────
+
+export interface MilestoneCascadeChange {
+  id: string
+  name: string
+  phaseName: string
+  oldDate: string | null
+  newDate: string
+}
+
+/** Adds `days` calendar days to a 'YYYY-MM-DD' string. */
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr + 'T00:00:00')
+  d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * Pure function — no Supabase calls.
+ * Returns every milestone that would shift when `changedId` moves to `newDueDate`,
+ * ordered by traversal depth (immediate dependents first).
+ */
+export function computeMilestoneCascade(
+  phases: ProjectPhase[],
+  changedId: string,
+  newDueDate: string,
+): MilestoneCascadeChange[] {
+  // Build lookup maps
+  const milestoneMap = new Map<string, ProjectMilestone>()
+  const phaseNameMap = new Map<string, string>()
+  for (const phase of phases) {
+    for (const m of phase.milestones) {
+      milestoneMap.set(m.id, m)
+      phaseNameMap.set(m.id, phase.name)
+    }
+  }
+
+  const changes: MilestoneCascadeChange[] = []
+  const visited = new Set<string>([changedId])
+
+  // BFS queue: [milestoneId, resolvedNewDate]
+  const queue: [string, string][] = [[changedId, newDueDate]]
+
+  while (queue.length > 0) {
+    const [predId, predNewDate] = queue.shift()!
+    for (const m of milestoneMap.values()) {
+      if (m.predecessor_id !== predId) continue
+      if (visited.has(m.id)) continue  // cycle guard
+      visited.add(m.id)
+      const newDate = addDays(predNewDate, m.lag_days)
+      changes.push({
+        id:       m.id,
+        name:     m.name,
+        phaseName: phaseNameMap.get(m.id) ?? '',
+        oldDate:  m.due_date,
+        newDate,
+      })
+      queue.push([m.id, newDate])
+    }
+  }
+
+  return changes
 }
 
 export async function deleteMilestone(
@@ -1350,6 +1428,22 @@ export async function deleteMilestone(
   const { error } = await client
     .from('milestones')
     .delete()
+    .eq('id', milestoneId)
+    .eq('tenant_id', tenantId)
+  if (error) throw error
+}
+
+/** Patches only the predecessor relationship — used by the CSV import second pass. */
+export async function setMilestonePredecessor(
+  client: SupabaseClient,
+  milestoneId: string,
+  tenantId: string,
+  predecessorId: string | null,
+  lagDays: number,
+): Promise<void> {
+  const { error } = await client
+    .from('milestones')
+    .update({ predecessor_id: predecessorId, lag_days: lagDays } as unknown as never)
     .eq('id', milestoneId)
     .eq('tenant_id', tenantId)
   if (error) throw error

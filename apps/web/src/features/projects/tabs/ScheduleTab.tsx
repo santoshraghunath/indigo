@@ -2,12 +2,14 @@ import { useState, useRef, useEffect } from 'react'
 import { useOutletContext, useParams } from 'react-router-dom'
 import { pdf, Document, Page, View, Text, Svg, Rect, Line, Path } from '@react-pdf/renderer'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import type { ProjectRow, ProjectPhase, ProjectMilestone } from '@indigo/shared'
+import type { ProjectRow, ProjectPhase, ProjectMilestone, MilestoneCascadeChange } from '@indigo/shared'
 import {
   upsertPhase,
   upsertMilestone,
   deletePhase,
   deleteMilestone,
+  setMilestonePredecessor,
+  computeMilestoneCascade,
 } from '@indigo/shared'
 import type { UpsertPhaseInput, UpsertMilestoneInput } from '@indigo/shared'
 import { useProjectPhases } from '../useProject'
@@ -25,6 +27,7 @@ import {
   TrashIcon,
   XMarkIcon,
   ArrowDownTrayIcon,
+  ArrowUpTrayIcon,
   DocumentIcon,
   TableCellsIcon,
   ChevronDownIcon,
@@ -58,6 +61,12 @@ function fmtMonthYear(d: Date): string {
 function isOverdue(dueDate: string | null, completedDate: string | null): boolean {
   if (completedDate || !dueDate) return false
   return new Date(dueDate + 'T00:00:00') < new Date()
+}
+
+function addDays(dateStr: string, days: number): string {
+  const d = new Date(dateStr + 'T00:00:00')
+  d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
 }
 
 // ── Status configs ─────────────────────────────────────────────────────────
@@ -306,6 +315,7 @@ function MilestoneModal({
   nextSequence,
   onClose,
   onSaved,
+  onCascadeNeeded,
 }: {
   projectId: string
   tenantId: string
@@ -315,6 +325,7 @@ function MilestoneModal({
   nextSequence: number
   onClose: () => void
   onSaved: () => void
+  onCascadeNeeded?: (changes: MilestoneCascadeChange[]) => void
 }) {
   const toast  = useToast()
   const isEdit = !!milestone
@@ -335,6 +346,12 @@ function MilestoneModal({
       : '',
   )
   const [nameError,             setNameError]             = useState('')
+  const [predecessorId,         setPredecessorId]         = useState(milestone?.predecessor_id         ?? '')
+  const [lagDays,               setLagDays]               = useState(milestone?.lag_days               ?? 0)
+
+  const allMilestones   = phases.flatMap((p) => p.milestones.map((m) => ({ ...m, phaseName: p.name })))
+  const predecessor     = allMilestones.find((m) => m.id === predecessorId)
+  const computedDueDate = predecessor?.due_date ? addDays(predecessor.due_date, lagDays) : null
 
   const showCompletedDate = status === 'complete' || status === 'approved'
 
@@ -345,7 +362,7 @@ function MilestoneModal({
         phase_id:                 phaseId  || null,
         name:                     name.trim(),
         description:              description.trim() || null,
-        due_date:                 dueDate        || null,
+        due_date:                 computedDueDate ?? (dueDate || null),
         completed_date:           showCompletedDate ? (completedDate || null) : null,
         status,
         sequence:                 milestone?.sequence ?? nextSequence,
@@ -356,12 +373,24 @@ function MilestoneModal({
         invoice_amount_cents:     triggersInvoice && invoiceAmount.trim()
           ? Math.round(parseFloat(invoiceAmount.replace(/,/g, '')) * 100)
           : triggersInvoice ? null : undefined,
+        predecessor_id: predecessorId || null,
+        lag_days:       lagDays,
       }
       return upsertMilestone(supabase, tenantId, projectId, input)
     },
     onSuccess: () => {
       toast.success(isEdit ? 'Milestone updated' : 'Milestone added')
       onSaved()
+      if (isEdit && milestone?.id) {
+        const savedDate = computedDueDate ?? dueDate
+        if (savedDate) {
+          const changes = computeMilestoneCascade(phases, milestone.id, savedDate)
+          if (changes.length > 0) {
+            onCascadeNeeded?.(changes)
+            return
+          }
+        }
+      }
       onClose()
     },
     onError: (err) => {
@@ -425,12 +454,54 @@ function MilestoneModal({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">Due Date</label>
-              <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={inputCls} />
+              {computedDueDate ? (
+                <>
+                  <input type="date" value={computedDueDate} readOnly
+                    className={`${inputCls} cursor-not-allowed bg-gray-100 text-gray-500`} />
+                  <p className="mt-0.5 text-[11px] text-gray-400">
+                    Calculated: {predecessor!.name} + {lagDays}d
+                  </p>
+                </>
+              ) : (
+                <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={inputCls} />
+              )}
             </div>
             {showCompletedDate && (
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Completed Date</label>
                 <input type="date" value={completedDate} onChange={(e) => setCompletedDate(e.target.value)} className={inputCls} />
+              </div>
+            )}
+          </div>
+
+          {/* Dependency */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Depends On</label>
+              <select value={predecessorId} onChange={(e) => setPredecessorId(e.target.value)} className={selectCls}>
+                <option value="">No dependency</option>
+                {phases.map((p) => (
+                  <optgroup key={p.id} label={p.name}>
+                    {p.milestones
+                      .filter((m) => m.id !== milestone?.id)
+                      .map((m) => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            {predecessorId && (
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Lag Days</label>
+                <input
+                  type="number"
+                  value={lagDays}
+                  onChange={(e) => setLagDays(parseInt(e.target.value, 10) || 0)}
+                  min={-999}
+                  max={999}
+                  className={inputCls}
+                />
               </div>
             )}
           </div>
@@ -550,6 +621,69 @@ function DeleteConfirmModal({
   )
 }
 
+// ── Cascade confirm modal ──────────────────────────────────────────────────
+
+function CascadeConfirmModal({
+  changes,
+  onConfirm,
+  onClose,
+  isPending,
+}: {
+  changes: MilestoneCascadeChange[]
+  onConfirm: () => void
+  onClose: () => void
+  isPending: boolean
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Update dependent milestones?</p>
+            <p className="mt-0.5 text-xs text-gray-500">{changes.length} milestone{changes.length !== 1 ? 's' : ''} will shift</p>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+            <XMarkIcon className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="max-h-60 overflow-y-auto px-5 py-3">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                <th className="pb-2 pr-2">Milestone</th>
+                <th className="pb-2 pr-2">Phase</th>
+                <th className="pb-2 pr-2">Was</th>
+                <th className="pb-2">Becomes</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {changes.map((c) => (
+                <tr key={c.id}>
+                  <td className="py-1.5 pr-2 font-medium text-gray-800">{c.name}</td>
+                  <td className="py-1.5 pr-2 text-gray-500">{c.phaseName}</td>
+                  <td className="py-1.5 pr-2 text-gray-400">{c.oldDate ? fmtDateShort(c.oldDate) : '—'}</td>
+                  <td className="py-1.5 font-medium text-brand-700">{fmtDateShort(c.newDate)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center justify-end gap-3 rounded-b-2xl border-t border-gray-100 bg-gray-50 px-5 py-3">
+          <button onClick={onClose} disabled={isPending}
+            className="h-8 rounded-lg px-3.5 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-colors disabled:opacity-50">
+            Skip
+          </button>
+          <button onClick={onConfirm} disabled={isPending}
+            className="inline-flex h-8 items-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-sm transition-colors hover:bg-brand-700 disabled:opacity-60">
+            {isPending ? 'Applying…' : `Apply to ${changes.length}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Modal state ────────────────────────────────────────────────────────────
 
 type ModalState =
@@ -560,6 +694,8 @@ type ModalState =
   | { type: 'edit-milestone'; milestone: ProjectMilestone }
   | { type: 'delete-phase'; phase: ProjectPhase }
   | { type: 'delete-milestone'; milestone: ProjectMilestone }
+  | { type: 'cascade-confirm'; changes: MilestoneCascadeChange[] }
+  | { type: 'import-csv' }
 
 // ── Milestone row (list view) ──────────────────────────────────────────────
 
@@ -863,6 +999,44 @@ function GanttView({ phases }: { phases: ProjectPhase[] }) {
   const todayPx   = Math.round(((today.getTime() - minDate.getTime()) / totalMs) * CHART_W)
   const showToday = todayPx >= 0 && todayPx <= CHART_W
 
+  const ROW_H = 52
+
+  // Build milestone position map for dependency arrows
+  const milestonePositions = new Map<string, { phaseIndex: number; dueDate: string | null }>()
+  sorted.forEach((phase, phaseIndex) => {
+    for (const m of phase.milestones) {
+      milestonePositions.set(m.id, { phaseIndex, dueDate: m.due_date ?? null })
+    }
+  })
+
+  const arrows: JSX.Element[] = []
+  sorted.forEach((phase, phaseIndex) => {
+    for (const m of phase.milestones) {
+      if (!m.predecessor_id || !m.due_date) continue
+      const predPos = milestonePositions.get(m.predecessor_id)
+      if (!predPos || !predPos.dueDate) continue
+      const fromX = toPx(predPos.dueDate)
+      const toX   = toPx(m.due_date)
+      if (fromX < 0 || toX < 0) continue
+      const fromY = predPos.phaseIndex * ROW_H + ROW_H / 2
+      const toY   = phaseIndex * ROW_H + ROW_H / 2
+      arrows.push(
+        <g key={m.id}>
+          <path
+            d={`M ${fromX} ${fromY} C ${fromX + 40} ${fromY} ${toX - 40} ${toY} ${toX} ${toY}`}
+            stroke="#d1d5db"
+            strokeWidth={1.5}
+            fill="none"
+          />
+          <polygon
+            points={`${toX},${toY} ${toX - 6},${toY - 3} ${toX - 6},${toY + 3}`}
+            fill="#d1d5db"
+          />
+        </g>,
+      )
+    }
+  })
+
   return (
     <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-card">
       {/* Horizontal scroll wraps everything */}
@@ -886,59 +1060,71 @@ function GanttView({ phases }: { phases: ProjectPhase[] }) {
 
           {/* ── Phase rows — vertically scrollable ───────────────────── */}
           <div className="max-h-[60vh] overflow-y-auto">
-            {sorted.map((phase) => {
-              const accentColor = phase.color ?? PHASE_ACCENT[phase.status] ?? '#d1d5db'
-              const cfg         = PHASE_STATUS[phase.status] ?? PHASE_STATUS.not_started
-              const hasBar      = !!(phase.start_date && phase.end_date)
-              const barLeft     = hasBar ? toPx(phase.start_date) : -1
-              const barRight    = hasBar ? toPx(phase.end_date, 1) : -1
-              const barWidth    = hasBar ? Math.max(barRight - barLeft, 4) : 0
-              const milestones  = phase.milestones.filter((m) => m.due_date)
+            <div className="relative">
+              {sorted.map((phase) => {
+                const accentColor = phase.color ?? PHASE_ACCENT[phase.status] ?? '#d1d5db'
+                const cfg         = PHASE_STATUS[phase.status] ?? PHASE_STATUS.not_started
+                const hasBar      = !!(phase.start_date && phase.end_date)
+                const barLeft     = hasBar ? toPx(phase.start_date) : -1
+                const barRight    = hasBar ? toPx(phase.end_date, 1) : -1
+                const barWidth    = hasBar ? Math.max(barRight - barLeft, 4) : 0
+                const milestones  = phase.milestones.filter((m) => m.due_date)
 
-              return (
-                <div key={phase.id} className="flex border-b border-gray-100 last:border-0 hover:bg-gray-50/50">
-                  <div className="flex shrink-0 flex-col justify-center border-r border-gray-100 px-4 py-3" style={{ width: LEFT_COL_W }}>
-                    <span className="truncate text-xs font-semibold text-gray-800">{phase.name}</span>
-                    <span className={`mt-0.5 text-[10px] font-medium ${cfg.color}`}>{cfg.label}</span>
-                  </div>
-                  <div className="relative" style={{ width: CHART_W, minHeight: 52 }}>
-                    {/* Month grid lines */}
-                    {months.map((m) => (
-                      <div key={m.label} className="absolute inset-y-0 w-px bg-gray-100" style={{ left: m.px }} />
-                    ))}
-                    {/* Today line */}
-                    {showToday && (
-                      <div className="absolute inset-y-0 w-px bg-red-300" style={{ left: todayPx }} />
-                    )}
-                    {/* Phase duration bar */}
-                    {hasBar && (
-                      <div
-                        className="absolute top-1/2 h-6 -translate-y-1/2 rounded-md"
-                        style={{ left: barLeft, width: barWidth, backgroundColor: accentColor, opacity: 0.85 }}
-                      />
-                    )}
-                    {/* Milestone diamonds */}
-                    {milestones.map((m) => {
-                      const mp      = toPx(m.due_date)
-                      if (mp < 0) return null
-                      const done    = m.status === 'complete' || m.status === 'approved'
-                      const overdue = isOverdue(m.due_date, m.completed_date)
-                      const color   = done ? '#16a34a' : overdue ? '#f59e0b' : m.status === 'blocked' ? '#ef4444' : '#6366f1'
-                      return (
+                return (
+                  <div key={phase.id} className="flex border-b border-gray-100 last:border-0 hover:bg-gray-50/50">
+                    <div className="flex shrink-0 flex-col justify-center border-r border-gray-100 px-4 py-3" style={{ width: LEFT_COL_W }}>
+                      <span className="truncate text-xs font-semibold text-gray-800">{phase.name}</span>
+                      <span className={`mt-0.5 text-[10px] font-medium ${cfg.color}`}>{cfg.label}</span>
+                    </div>
+                    <div className="relative" style={{ width: CHART_W, minHeight: ROW_H }}>
+                      {/* Month grid lines */}
+                      {months.map((m) => (
+                        <div key={m.label} className="absolute inset-y-0 w-px bg-gray-100" style={{ left: m.px }} />
+                      ))}
+                      {/* Today line */}
+                      {showToday && (
+                        <div className="absolute inset-y-0 w-px bg-red-300" style={{ left: todayPx }} />
+                      )}
+                      {/* Phase duration bar */}
+                      {hasBar && (
                         <div
-                          key={m.id}
-                          className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 cursor-default"
-                          style={{ left: mp }}
-                          title={`${m.name} — Due ${fmtDateShort(m.due_date)}${done ? ' ✓' : overdue ? ' (overdue)' : ''}`}
-                        >
-                          <div className="h-3.5 w-3.5 rotate-45 rounded-sm ring-2 ring-white" style={{ backgroundColor: color }} />
-                        </div>
-                      )
-                    })}
+                          className="absolute top-1/2 h-6 -translate-y-1/2 rounded-md"
+                          style={{ left: barLeft, width: barWidth, backgroundColor: accentColor, opacity: 0.85 }}
+                        />
+                      )}
+                      {/* Milestone diamonds */}
+                      {milestones.map((m) => {
+                        const mp      = toPx(m.due_date)
+                        if (mp < 0) return null
+                        const done    = m.status === 'complete' || m.status === 'approved'
+                        const overdue = isOverdue(m.due_date, m.completed_date)
+                        const color   = done ? '#16a34a' : overdue ? '#f59e0b' : m.status === 'blocked' ? '#ef4444' : '#6366f1'
+                        return (
+                          <div
+                            key={m.id}
+                            className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 cursor-default"
+                            style={{ left: mp }}
+                            title={`${m.name} — Due ${fmtDateShort(m.due_date)}${done ? ' ✓' : overdue ? ' (overdue)' : ''}`}
+                          >
+                            <div className="h-3.5 w-3.5 rotate-45 rounded-sm ring-2 ring-white" style={{ backgroundColor: color }} />
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              )
-            })}
+                )
+              })}
+              {/* Dependency arrows overlay */}
+              {arrows.length > 0 && (
+                <svg
+                  className="pointer-events-none absolute top-0"
+                  style={{ left: LEFT_COL_W, width: CHART_W, height: sorted.length * ROW_H }}
+                  aria-hidden
+                >
+                  {arrows}
+                </svg>
+              )}
+            </div>
           </div>
 
           {/* ── Today label footer ───────────────────────────────────── */}
@@ -988,14 +1174,22 @@ function GanttView({ phases }: { phases: ProjectPhase[] }) {
 // ── CSV export ─────────────────────────────────────────────────────────────
 
 function exportCsv(phases: ProjectPhase[], projectName: string): void {
+  const milestoneNameById = new Map<string, string>()
+  for (const phase of phases) {
+    for (const m of phase.milestones) {
+      milestoneNameById.set(m.id, m.name)
+    }
+  }
+
   const rows: string[][] = [
     ['Type', 'Phase', 'Milestone', 'Status', 'Start Date', 'End Date', 'Due Date',
-     'Completed Date', 'Client Visible', 'Triggers Draw', 'Triggers Invoice', 'Invoice Amount ($)'],
+     'Completed Date', 'Client Visible', 'Triggers Draw', 'Triggers Invoice', 'Invoice Amount ($)',
+     'Depends On (Milestone Name)', 'Lag Days'],
   ]
   for (const phase of [...phases].sort((a, b) => a.sequence - b.sequence)) {
     rows.push([
       'Phase', phase.name, '', PHASE_STATUS[phase.status]?.label ?? phase.status,
-      phase.start_date ?? '', phase.end_date ?? '', '', '', '', '', '', '',
+      phase.start_date ?? '', phase.end_date ?? '', '', '', '', '', '', '', '', '',
     ])
     for (const m of [...phase.milestones].sort((a, b) => a.sequence - b.sequence)) {
       rows.push([
@@ -1005,6 +1199,8 @@ function exportCsv(phases: ProjectPhase[], projectName: string): void {
         m.triggers_draw_request ? 'Yes' : 'No',
         m.triggers_invoice ? 'Yes' : 'No',
         m.invoice_amount_cents != null ? (m.invoice_amount_cents / 100).toFixed(2) : '',
+        m.predecessor_id ? (milestoneNameById.get(m.predecessor_id) ?? '') : '',
+        String(m.lag_days ?? 0),
       ])
     }
   }
@@ -1299,6 +1495,299 @@ function ExportMenu({ phases, projectName }: { phases: ProjectPhase[]; projectNa
   )
 }
 
+// ── Import CSV modal ───────────────────────────────────────────────────────
+
+function parseCsv(text: string): { rows: Record<string, string>[]; errors: string[] } {
+  function splitRow(line: string): string[] {
+    const fields: string[] = []
+    let cur = ''
+    let inQ = false
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') {
+        if (inQ && line[i + 1] === '"') { cur += '"'; i++ }
+        else { inQ = !inQ }
+      } else if (line[i] === ',' && !inQ) {
+        fields.push(cur); cur = ''
+      } else {
+        cur += line[i]
+      }
+    }
+    fields.push(cur)
+    return fields
+  }
+
+  const lines = text.split(/\r?\n/).filter((l) => l.trim())
+  if (lines.length < 2) return { rows: [], errors: ['File is empty or has no data rows.'] }
+
+  const header = splitRow(lines[0]).map((h) => h.trim().toLowerCase())
+  const REQUIRED = ['type', 'phase', 'milestone', 'status']
+  const missing  = REQUIRED.filter((r) => !header.includes(r))
+  if (missing.length > 0) {
+    return {
+      rows: [],
+      errors: [`Missing required columns: ${missing.join(', ')}. Download the export CSV to get the correct format.`],
+    }
+  }
+
+  function col(cells: string[], name: string) {
+    const idx = header.indexOf(name)
+    return idx >= 0 ? (cells[idx] ?? '').trim() : ''
+  }
+
+  const rows: Record<string, string>[] = []
+  const errors: string[] = []
+  for (let i = 1; i < lines.length; i++) {
+    const cells = splitRow(lines[i])
+    const type  = col(cells, 'type')
+    if (type !== 'Phase' && type !== 'Milestone') {
+      errors.push(`Row ${i + 1}: Type must be "Phase" or "Milestone", got "${type}".`)
+      continue
+    }
+    rows.push({
+      type,
+      phase:          col(cells, 'phase'),
+      milestone:      col(cells, 'milestone'),
+      status:         col(cells, 'status'),
+      startDate:      col(cells, 'start date'),
+      endDate:        col(cells, 'end date'),
+      dueDate:        col(cells, 'due date'),
+      completedDate:  col(cells, 'completed date'),
+      clientVisible:  col(cells, 'client visible'),
+      triggersDraw:   col(cells, 'triggers draw'),
+      triggersInvoice: col(cells, 'triggers invoice'),
+      invoiceAmount:  col(cells, 'invoice amount ($)'),
+      dependsOn:      col(cells, 'depends on (milestone name)'),
+      lagDays:        col(cells, 'lag days'),
+    })
+  }
+  return { rows, errors }
+}
+
+function ImportCsvModal({
+  projectId,
+  tenantId,
+  phases,
+  onClose,
+  onImported,
+}: {
+  projectId: string
+  tenantId: string
+  phases: ProjectPhase[]
+  onClose: () => void
+  onImported: () => void
+}) {
+  const toast        = useToast()
+  const queryClient  = useQueryClient()
+
+  const [step,      setStep]     = useState<'pick' | 'preview' | 'applying'>('pick')
+  const [parsed,    setParsed]   = useState<Record<string, string>[]>([])
+  const [errors,    setErrors]   = useState<string[]>([])
+  const [fileName,  setFileName] = useState('')
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setFileName(file.name)
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const { rows, errors: errs } = parseCsv(ev.target?.result as string)
+      setParsed(rows)
+      setErrors(errs)
+      setStep('preview')
+    }
+    reader.readAsText(file)
+  }
+
+  const phaseCount     = parsed.filter((r) => r.type === 'Phase').length
+  const milestoneCount = parsed.filter((r) => r.type === 'Milestone').length
+
+  // Map status label → status key
+  const statusLabelMap: Record<string, string> = {}
+  for (const [k, v] of Object.entries(PHASE_STATUS)) statusLabelMap[v.label.toLowerCase()] = k
+
+  async function applyImport() {
+    setStep('applying')
+    try {
+      // Delete all existing phases (cascades to milestones via service)
+      for (const phase of phases) {
+        await deletePhase(supabase, phase.id, tenantId)
+      }
+
+      // Group rows by phase
+      type PhaseGroup = { row: Record<string, string>; milestones: Record<string, string>[] }
+      const groups: PhaseGroup[] = []
+      let cur: PhaseGroup | null = null
+      for (const row of parsed) {
+        if (row.type === 'Phase') {
+          cur = { row, milestones: [] }
+          groups.push(cur)
+        } else if (cur) {
+          cur.milestones.push(row)
+        }
+      }
+
+      // Insert phases and milestones; track name→id for second pass
+      const nameToId  = new Map<string, string>()
+      const pendingDeps: { id: string; dependsOn: string; lagDays: number }[] = []
+
+      for (let pi = 0; pi < groups.length; pi++) {
+        const { row: pr, milestones } = groups[pi]
+        const phaseStatus = statusLabelMap[pr.status.toLowerCase()] ?? 'not_started'
+        const newPhase = await upsertPhase(supabase, tenantId, projectId, {
+          name:       pr.phase,
+          status:     phaseStatus as ProjectPhase['status'],
+          start_date: pr.startDate || null,
+          end_date:   pr.endDate   || null,
+          sequence:   pi,
+        })
+
+        for (let mi = 0; mi < milestones.length; mi++) {
+          const mr = milestones[mi]
+          const mStatus = statusLabelMap[mr.status.toLowerCase()] ?? 'not_started'
+          const newM = await upsertMilestone(supabase, tenantId, projectId, {
+            phase_id:              newPhase.id,
+            name:                  mr.milestone || `Milestone ${mi + 1}`,
+            status:                mStatus,
+            due_date:              mr.dueDate       || null,
+            completed_date:        mr.completedDate || null,
+            sequence:              mi,
+            is_client_visible:     mr.clientVisible.toLowerCase() === 'yes',
+            requires_client_approval: false,
+            triggers_draw_request: mr.triggersDraw.toLowerCase() === 'yes',
+            triggers_invoice:      mr.triggersInvoice.toLowerCase() === 'yes',
+            invoice_amount_cents:  mr.triggersInvoice.toLowerCase() === 'yes' && mr.invoiceAmount
+              ? Math.round(parseFloat(mr.invoiceAmount.replace(/,/g, '')) * 100)
+              : mr.triggersInvoice.toLowerCase() === 'yes' ? null : undefined,
+          })
+          nameToId.set(mr.milestone, newM.id)
+          if (mr.dependsOn) {
+            pendingDeps.push({ id: newM.id, dependsOn: mr.dependsOn, lagDays: parseInt(mr.lagDays, 10) || 0 })
+          }
+        }
+      }
+
+      // Second pass: patch predecessor_id
+      for (const dep of pendingDeps) {
+        const predId = nameToId.get(dep.dependsOn)
+        if (predId) {
+          await setMilestonePredecessor(supabase, dep.id, tenantId, predId, dep.lagDays)
+        }
+      }
+
+      void queryClient.invalidateQueries({ queryKey: ['project-phases', projectId] })
+      toast.success(`Imported ${phaseCount} phase${phaseCount !== 1 ? 's' : ''} and ${milestoneCount} milestone${milestoneCount !== 1 ? 's' : ''}`)
+      onImported()
+      onClose()
+    } catch (err) {
+      toast.error('Import failed', err instanceof Error ? err.message : 'Try again.')
+      setStep('preview')
+    }
+  }
+
+  return (
+    <ModalShell title="Import Schedule from CSV" onClose={onClose}>
+      <div className="flex flex-col flex-1 min-h-0">
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+
+          {step === 'pick' && (
+            <>
+              <p className="text-sm text-gray-600">
+                Upload a CSV file in the schedule export format. The existing schedule will be replaced.
+              </p>
+              <label className="block cursor-pointer rounded-xl border-2 border-dashed border-gray-200 px-6 py-10 text-center hover:border-brand-300 transition-colors">
+                <input type="file" accept=".csv" className="sr-only" onChange={handleFile} />
+                <ArrowUpTrayIcon className="mx-auto mb-2 h-8 w-8 text-gray-300" strokeWidth={1} />
+                <p className="text-sm font-medium text-brand-600">Click to select a CSV file</p>
+                <p className="mt-1 text-xs text-gray-400">Must match the schedule export format</p>
+              </label>
+            </>
+          )}
+
+          {(step === 'preview' || step === 'applying') && (
+            <>
+              <div className="flex items-center justify-between rounded-lg bg-gray-50 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium text-gray-800">{fileName}</p>
+                  <p className="mt-0.5 text-xs text-gray-500">
+                    {phaseCount} phase{phaseCount !== 1 ? 's' : ''} · {milestoneCount} milestone{milestoneCount !== 1 ? 's' : ''}
+                    {errors.length > 0 && ` · ${errors.length} error${errors.length !== 1 ? 's' : ''}`}
+                  </p>
+                </div>
+                {step === 'preview' && (
+                  <button type="button" onClick={() => { setStep('pick'); setParsed([]); setErrors([]) }}
+                    className="text-xs text-gray-500 hover:text-gray-700">
+                    Change file
+                  </button>
+                )}
+              </div>
+
+              {errors.length > 0 && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+                  <p className="mb-1 text-xs font-semibold text-red-700">Fix these errors before importing:</p>
+                  <ul className="space-y-0.5">
+                    {errors.map((e, i) => <li key={i} className="text-xs text-red-600">• {e}</li>)}
+                  </ul>
+                </div>
+              )}
+
+              {errors.length === 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                  <strong>Replace mode:</strong> All existing phases and milestones will be deleted and replaced with the imported data. This cannot be undone.
+                </div>
+              )}
+
+              {milestoneCount > 0 && (
+                <div className="max-h-48 overflow-y-auto rounded-lg border border-gray-200">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-gray-50">
+                      <tr className="text-left text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                        <th className="px-3 py-2">Phase</th>
+                        <th className="px-3 py-2">Milestone</th>
+                        <th className="px-3 py-2">Due Date</th>
+                        <th className="px-3 py-2">Depends On</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {parsed.filter((r) => r.type === 'Milestone').map((r, i) => (
+                        <tr key={i}>
+                          <td className="px-3 py-1.5 text-gray-500">{r.phase}</td>
+                          <td className="px-3 py-1.5 font-medium text-gray-800">{r.milestone}</td>
+                          <td className="px-3 py-1.5 text-gray-500">{r.dueDate || '—'}</td>
+                          <td className="px-3 py-1.5 text-gray-500">{r.dependsOn || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-3 rounded-b-2xl border-t border-gray-200 bg-gray-50 px-5 py-3">
+          <button type="button" onClick={onClose} disabled={step === 'applying'}
+            className="h-8 rounded-lg px-3.5 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-colors disabled:opacity-50">
+            Cancel
+          </button>
+          {step === 'preview' && (
+            <button type="button" onClick={() => void applyImport()}
+              disabled={errors.length > 0 || parsed.length === 0}
+              className="inline-flex h-8 items-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-sm transition-colors hover:bg-brand-700 disabled:opacity-60">
+              Import Schedule
+            </button>
+          )}
+          {step === 'applying' && (
+            <button disabled
+              className="inline-flex h-8 items-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white shadow-sm opacity-60">
+              Importing…
+            </button>
+          )}
+        </div>
+      </div>
+    </ModalShell>
+  )
+}
+
 // ── Loading skeleton ───────────────────────────────────────────────────────
 
 function ScheduleSkeleton() {
@@ -1438,6 +1927,46 @@ export function ScheduleTab() {
     onSuccess: () => { refresh(); setModal({ type: 'none' }) },
   })
 
+  const toast = useToast()
+
+  // Cascade apply mutation — looks up full milestone data to preserve all existing fields
+  const cascadeMut = useMutation({
+    mutationFn: async (changes: MilestoneCascadeChange[]) => {
+      const msMap = new Map<string, ProjectMilestone>()
+      for (const phase of sorted) {
+        for (const m of phase.milestones) msMap.set(m.id, m)
+      }
+      await Promise.all(
+        changes.map((c) => {
+          const m = msMap.get(c.id)
+          if (!m) return Promise.resolve({ id: c.id })
+          return upsertMilestone(supabase, tenantId, projectId!, {
+            id:                       m.id,
+            phase_id:                 m.phase_id,
+            name:                     m.name,
+            description:              m.description,
+            due_date:                 c.newDate,
+            completed_date:           m.completed_date,
+            status:                   m.status,
+            sequence:                 m.sequence,
+            is_client_visible:        m.is_client_visible,
+            requires_client_approval: m.requires_client_approval,
+            triggers_draw_request:    m.triggers_draw_request,
+            triggers_invoice:         m.triggers_invoice,
+            invoice_amount_cents:     m.invoice_amount_cents ?? undefined,
+            predecessor_id:           m.predecessor_id,
+            lag_days:                 m.lag_days,
+          })
+        }),
+      )
+    },
+    onSuccess: () => { refresh(); setModal({ type: 'none' }) },
+    onError:   (err) => {
+      toast.error('Cascade update failed', err instanceof Error ? err.message : 'Try again.')
+      setModal({ type: 'none' })
+    },
+  })
+
   return (
     <div className="px-5 py-6 lg:px-8">
       {isLoading ? (
@@ -1465,13 +1994,22 @@ export function ScheduleTab() {
 
           <div className="mb-4 flex items-center justify-between gap-3">
             {canEdit ? (
-              <button
-                onClick={() => setModal({ type: 'add-phase' })}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 hover:border-brand-300 hover:text-brand-700 transition-colors"
-              >
-                <PlusIcon className="h-3.5 w-3.5" strokeWidth={2.5} />
-                Add Phase
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setModal({ type: 'add-phase' })}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 hover:border-brand-300 hover:text-brand-700 transition-colors"
+                >
+                  <PlusIcon className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  Add Phase
+                </button>
+                <button
+                  onClick={() => setModal({ type: 'import-csv' })}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 hover:border-brand-300 hover:text-brand-700 transition-colors"
+                >
+                  <ArrowUpTrayIcon className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  Import CSV
+                </button>
+              </div>
             ) : <div />}
             <div className="flex items-center gap-2">
               <ExportMenu phases={sorted} projectName={project?.job?.job_name ?? 'Project'} />
@@ -1524,6 +2062,7 @@ export function ScheduleTab() {
           nextSequence={modal.type === 'add-milestone' ? modal.nextSeq : 0}
           onClose={() => setModal({ type: 'none' })}
           onSaved={refresh}
+          onCascadeNeeded={(changes) => setModal({ type: 'cascade-confirm', changes })}
         />
       )}
 
@@ -1542,6 +2081,25 @@ export function ScheduleTab() {
           onConfirm={() => deleteMilestoneMut.mutate(modal.milestone.id)}
           onClose={() => setModal({ type: 'none' })}
           isPending={deleteMilestoneMut.isPending}
+        />
+      )}
+
+      {modal.type === 'cascade-confirm' && (
+        <CascadeConfirmModal
+          changes={modal.changes}
+          onConfirm={() => cascadeMut.mutate(modal.changes)}
+          onClose={() => setModal({ type: 'none' })}
+          isPending={cascadeMut.isPending}
+        />
+      )}
+
+      {modal.type === 'import-csv' && (
+        <ImportCsvModal
+          projectId={projectId!}
+          tenantId={tenantId}
+          phases={sorted}
+          onClose={() => setModal({ type: 'none' })}
+          onImported={refresh}
         />
       )}
     </div>
