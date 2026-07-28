@@ -601,6 +601,32 @@ export async function getProjectInvoices(
   return (data ?? []) as ProjectInvoice[]
 }
 
+export interface InvoiceLineItem {
+  id: string
+  description: string
+  quantity: number
+  unit: string
+  unit_price_cents: number
+  amount_cents: number
+  sort_order: number
+}
+
+export async function getInvoiceLineItems(
+  client: SupabaseClient,
+  invoiceId: string,
+  tenantId: string,
+): Promise<InvoiceLineItem[]> {
+  const { data, error } = await client
+    .from('invoice_items')
+    .select('id, description, quantity, unit, unit_price_cents, amount_cents, sort_order')
+    .eq('invoice_id', invoiceId)
+    .eq('tenant_id', tenantId)
+    .order('sort_order', { ascending: true })
+
+  if (error) throw error
+  return (data ?? []) as InvoiceLineItem[]
+}
+
 // ── Documents ──────────────────────────────────────────────────────────────
 
 export async function getProjectDocuments(

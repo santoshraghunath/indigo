@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useOutletContext, useParams } from 'react-router-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   ProjectRow,
   ProjectChangeOrder,
@@ -8,6 +8,7 @@ import type {
   ProjectDrawSchedule,
   ProjectInvoice,
   InvoiceTriggerMilestone,
+  InvoiceLineItem,
   CreateChangeOrderInput,
   UpdateChangeOrderInput,
   CreateDrawScheduleInput,
@@ -24,6 +25,7 @@ import {
   updateMilestoneInvoiceAmount,
   linkMilestoneInvoice,
   getInvoiceTriggerState,
+  getInvoiceLineItems,
 } from '@indigo/shared'
 import {
   useProjectChangeOrders,
@@ -39,6 +41,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import {
   CheckIcon,
   ExclamationTriangleIcon,
+  EyeIcon,
   PencilIcon,
   PlusIcon,
   XMarkIcon,
@@ -775,12 +778,14 @@ function ChangeOrdersSection({
   changeOrders,
   onAdd,
   onEdit,
+  onView,
   onWithdraw,
   withdrawingId,
 }: {
   changeOrders: ProjectChangeOrder[]
   onAdd: () => void
   onEdit: (co: ProjectChangeOrder) => void
+  onView: (co: ProjectChangeOrder) => void
   onWithdraw: (co: ProjectChangeOrder) => void
   withdrawingId: string | null
 }) {
@@ -860,13 +865,21 @@ function ChangeOrdersSection({
 
                 <div className="shrink-0 flex items-start gap-2">
                   {/* Edit button — draft and pending_approval */}
-                  {isEditable && (
+                  {isEditable ? (
                     <button
                       onClick={() => onEdit(co)}
                       className="rounded p-1 text-gray-300 opacity-0 group-hover:opacity-100 hover:bg-gray-100 hover:text-gray-600 transition-all"
                       title="Edit change order"
                     >
                       <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => onView(co)}
+                      className="rounded p-1 text-gray-300 opacity-0 group-hover:opacity-100 hover:bg-gray-100 hover:text-gray-600 transition-all"
+                      title="View change order details"
+                    >
+                      <EyeIcon className="h-3.5 w-3.5" strokeWidth={2} />
                     </button>
                   )}
                   <div className="text-right">
@@ -1481,7 +1494,7 @@ function InvoiceMilestonesSection({
   )
 }
 
-function InvoicesSection({ invoices }: { invoices: ProjectInvoice[] }) {
+function InvoicesSection({ invoices, onView }: { invoices: ProjectInvoice[]; onView: (inv: ProjectInvoice) => void }) {
   const totalBilled  = invoices.reduce((s, i) => s + i.total_cents, 0)
   const totalPaid    = invoices.reduce((s, i) => s + i.amount_paid_cents, 0)
   const totalBalance = invoices.reduce((s, i) => s + i.balance_due_cents, 0)
@@ -1515,7 +1528,7 @@ function InvoicesSection({ invoices }: { invoices: ProjectInvoice[] }) {
             {invoices.map((inv) => (
               // Desktop: 5 explicit cols → INVOICE | DATE | TOTAL | PAID | BALANCE
               // Mobile:  2 cols — invoice+date on top row, money summary below
-              <div key={inv.id} className="grid grid-cols-2 gap-x-4 gap-y-1 px-5 py-3 lg:grid-cols-5 lg:items-center">
+              <div key={inv.id} onClick={() => onView(inv)} className="grid grid-cols-2 gap-x-4 gap-y-1 px-5 py-3 lg:grid-cols-5 lg:items-center cursor-pointer hover:bg-gray-50 transition-colors">
 
                 {/* Col 1 — INVOICE: number + status badge */}
                 <div>
@@ -1599,6 +1612,161 @@ function InvoicesSection({ invoices }: { invoices: ProjectInvoice[] }) {
   )
 }
 
+// ── View CO modal (read-only) ──────────────────────────────────────────────
+
+function ViewCOModal({ co, onClose }: { co: ProjectChangeOrder; onClose: () => void }) {
+  const rows = [
+    { label: 'Amount',           value: `${co.amount_cents >= 0 ? '+' : ''}${formatMoney(co.amount_cents)}` },
+    { label: 'Schedule Impact',  value: co.schedule_impact_days != null ? `${co.schedule_impact_days > 0 ? '+' : ''}${co.schedule_impact_days} days` : '—' },
+    { label: 'Date Submitted',   value: fmtDate(co.date_submitted) },
+    { label: 'Approved',         value: fmtDate(co.approved_at) },
+  ]
+
+  return (
+    <ModalShell title={co.co_number} subtitle={co.title ?? undefined} onClose={onClose}>
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+        <div className="flex items-center gap-2">
+          <StatusBadge status={co.co_status} map={CO_STATUS} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          {rows.map(({ label, value }) => (
+            <div key={label} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-gray-400">{label}</p>
+              <p className="mt-0.5 text-sm font-semibold text-gray-900">{value}</p>
+            </div>
+          ))}
+        </div>
+
+        {co.description && (
+          <div>
+            <p className="mb-1 text-xs font-medium text-gray-500">Description</p>
+            <p className="text-sm text-gray-700 whitespace-pre-wrap">{co.description}</p>
+          </div>
+        )}
+
+        {co.reason && (
+          <div>
+            <p className="mb-1 text-xs font-medium text-gray-500">Reason</p>
+            <p className="text-sm text-gray-700 whitespace-pre-wrap">{co.reason}</p>
+          </div>
+        )}
+
+        {co.notes && (
+          <div>
+            <p className="mb-1 text-xs font-medium text-gray-500">Notes</p>
+            <p className="text-sm text-gray-700 whitespace-pre-wrap">{co.notes}</p>
+          </div>
+        )}
+      </div>
+
+      <div className="flex justify-end border-t border-gray-100 px-5 py-4">
+        <button type="button" onClick={onClose}
+          className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 transition-colors">
+          Close
+        </button>
+      </div>
+    </ModalShell>
+  )
+}
+
+// ── View Invoice modal ─────────────────────────────────────────────────────
+
+function ViewInvoiceModal({
+  invoice,
+  tenantId,
+  onClose,
+}: {
+  invoice:  ProjectInvoice
+  tenantId: string
+  onClose:  () => void
+}) {
+  const { data: lineItems, isLoading } = useQuery<InvoiceLineItem[]>({
+    queryKey: ['invoice-line-items', invoice.id],
+    queryFn:  () => getInvoiceLineItems(supabase, invoice.id, tenantId),
+    staleTime: 60_000,
+  })
+
+  return (
+    <ModalShell title={invoice.invoice_number} subtitle="Invoice details" onClose={onClose}>
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+        {/* Header stats */}
+        <div className="flex items-center justify-between">
+          <StatusBadge status={invoice.invoice_status} map={INVOICE_STATUS} />
+          <div className="text-right text-xs text-gray-400">
+            {invoice.invoice_date && <span>{fmtDate(invoice.invoice_date)}</span>}
+            {invoice.due_date && <span className="ml-2">Due {fmtDate(invoice.due_date)}</span>}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: 'Total',   value: formatMoney(invoice.total_cents),       warn: false },
+            { label: 'Paid',    value: formatMoney(invoice.amount_paid_cents),  warn: false },
+            { label: 'Balance', value: formatMoney(invoice.balance_due_cents),
+              warn: invoice.balance_due_cents > 0 && invoice.invoice_status === 'overdue' },
+          ].map(({ label, value, warn }) => (
+            <div key={label} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-gray-400">{label}</p>
+              <p className={`mt-0.5 text-sm font-semibold ${warn ? 'text-red-700' : 'text-gray-900'}`}>{value}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Line items */}
+        <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">Line Items</p>
+          {isLoading ? (
+            <div className="space-y-2">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-9 animate-pulse rounded-lg bg-gray-100" />
+              ))}
+            </div>
+          ) : !lineItems || lineItems.length === 0 ? (
+            <p className="text-sm text-gray-400">No line items.</p>
+          ) : (
+            <div className="divide-y divide-gray-100 rounded-lg border border-gray-100 overflow-hidden">
+              {lineItems.map((item) => (
+                <div key={item.id} className="flex items-start justify-between gap-3 px-3 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-gray-800">{item.description || '—'}</p>
+                    {item.quantity !== 1 || item.unit ? (
+                      <p className="text-xs text-gray-400">
+                        {item.quantity} {item.unit} × {formatMoney(item.unit_price_cents)}
+                      </p>
+                    ) : null}
+                  </div>
+                  <p className="shrink-0 text-sm font-semibold tabular-nums text-gray-900">
+                    {formatMoney(item.amount_cents)}
+                  </p>
+                </div>
+              ))}
+              <div className="flex items-center justify-between bg-gray-50 px-3 py-2.5">
+                <p className="text-xs font-semibold text-gray-600">Total</p>
+                <p className="text-sm font-semibold tabular-nums text-gray-900">{formatMoney(invoice.total_cents)}</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {invoice.sent_at && (
+          <p className="text-xs text-gray-400">Sent {fmtDate(invoice.sent_at)}</p>
+        )}
+        {invoice.paid_at && (
+          <p className="text-xs text-gray-400">Paid {fmtDate(invoice.paid_at)}</p>
+        )}
+      </div>
+
+      <div className="flex justify-end border-t border-gray-100 px-5 py-4">
+        <button type="button" onClick={onClose}
+          className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 transition-colors">
+          Close
+        </button>
+      </div>
+    </ModalShell>
+  )
+}
+
 // ── Loading skeleton ───────────────────────────────────────────────────────
 
 function FinancialsSkeleton() {
@@ -1635,6 +1803,8 @@ type FinancialModal =
   | { type: 'none' }
   | { type: 'create-co' }
   | { type: 'edit-co'; co: ProjectChangeOrder }
+  | { type: 'view-co'; co: ProjectChangeOrder }
+  | { type: 'view-invoice'; invoice: ProjectInvoice }
   | { type: 'create-draw-schedule' }
   | { type: 'submit-draw' }
 
@@ -1708,6 +1878,7 @@ export function FinancialsTab() {
         changeOrders={cos}
         onAdd={() => setModal({ type: 'create-co' })}
         onEdit={(co) => setModal({ type: 'edit-co', co })}
+        onView={(co) => setModal({ type: 'view-co', co })}
         onWithdraw={(co) => withdrawMut.mutate(co)}
         withdrawingId={withdrawMut.isPending ? (withdrawMut.variables?.id ?? null) : null}
       />
@@ -1727,7 +1898,7 @@ export function FinancialsTab() {
         onRefresh={refreshInvoiceMilestones}
       />
 
-      <InvoicesSection invoices={invs} />
+      <InvoicesSection invoices={invs} onView={(inv) => setModal({ type: 'view-invoice', invoice: inv })} />
 
       {/* ── Modals ──────────────────────────────────────────────────────── */}
 
@@ -1750,6 +1921,21 @@ export function FinancialsTab() {
           co={modal.co}
           onClose={() => setModal({ type: 'none' })}
           onSaved={refreshCOs}
+        />
+      )}
+
+      {modal.type === 'view-co' && (
+        <ViewCOModal
+          co={modal.co}
+          onClose={() => setModal({ type: 'none' })}
+        />
+      )}
+
+      {modal.type === 'view-invoice' && (
+        <ViewInvoiceModal
+          invoice={modal.invoice}
+          tenantId={tenantId}
+          onClose={() => setModal({ type: 'none' })}
         />
       )}
 
