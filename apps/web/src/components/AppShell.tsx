@@ -1,6 +1,9 @@
-import { useState } from 'react'
+import { useRef, useEffect, useState, type FormEvent } from 'react'
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
+import { supabase } from '@/lib/supabase'
+import { useToast } from '@/stores/toastStore'
+import { Button } from '@/components/ui/Button'
 import {
   HomeIcon,
   FolderIcon,
@@ -16,6 +19,9 @@ import {
   XMarkIcon,
   TableCellsIcon,
   FunnelIcon,
+  ChevronDownIcon,
+  KeyIcon,
+  SignOutIcon,
 } from '@/components/ui/Icons'
 
 interface NavItem {
@@ -25,7 +31,6 @@ interface NavItem {
   end?: boolean
 }
 
-// Full navigation for PM-and-above staff
 const ALL_NAV_ITEMS: NavItem[] = [
   { to: '/',               label: 'Dashboard',      Icon: HomeIcon,      end: true },
   { to: '/projects',       label: 'Projects',        Icon: FolderIcon },
@@ -35,19 +40,28 @@ const ALL_NAV_ITEMS: NavItem[] = [
   { to: '/documents',      label: 'Documents',       Icon: DocumentIcon },
   { to: '/field',          label: 'Field',           Icon: ClipboardIcon },
   { to: '/subcontractors', label: 'Subcontractors',  Icon: UsersIcon },
-  { to: '/employees',      label: 'Employees',        Icon: UsersIcon },
-  { to: '/reports',        label: 'Reports',          Icon: TableCellsIcon },
+  { to: '/employees',      label: 'Employees',       Icon: UsersIcon },
+  { to: '/reports',        label: 'Reports',         Icon: TableCellsIcon },
   { to: '/ai',             label: 'AI Assistant',    Icon: SparklesIcon },
-  { to: '/settings',       label: 'Settings',         Icon: GearIcon },
+  { to: '/settings',       label: 'Settings',        Icon: GearIcon },
 ]
 
-// Field and subcontractor roles: Projects tab only
 const FIELD_NAV_ITEMS: NavItem[] = [
   { to: '/projects', label: 'Projects', Icon: FolderIcon },
 ]
 
-/** Roles restricted to the Projects-only view */
 const FIELD_ROLES = new Set(['field_associate', 'field_super', 'subcontractor'])
+
+const ROLE_LABELS: Record<string, string> = {
+  owner:           'Owner',
+  admin:           'Admin',
+  project_manager: 'Project Manager',
+  field_super:     'Field Supervisor',
+  field_associate: 'Field Associate',
+  accountant:      'Accountant',
+  subcontractor:   'Subcontractor',
+  client:          'Client',
+}
 
 function SidebarNavItem({ item }: { item: NavItem }) {
   return (
@@ -75,19 +89,185 @@ function SidebarNavItem({ item }: { item: NavItem }) {
   )
 }
 
+// ── Change password modal ──────────────────────────────────────────────────
+
+function ChangePasswordModal({ onClose }: { onClose: () => void }) {
+  const toast = useToast()
+  const [password, setPassword] = useState('')
+  const [confirm,  setConfirm]  = useState('')
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault()
+    setError(null)
+    if (password.length < 8) { setError('Password must be at least 8 characters'); return }
+    if (password !== confirm) { setError('Passwords do not match'); return }
+    setLoading(true)
+    const { error: updateError } = await supabase.auth.updateUser({ password })
+    if (updateError) {
+      setError(updateError.message)
+    } else {
+      toast.success('Password updated')
+      onClose()
+    }
+    setLoading(false)
+  }
+
+  const inputCls =
+    'block w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 ' +
+    'placeholder:text-gray-400 focus:bg-white focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 transition-colors'
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative w-full max-w-sm rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <h2 className="text-base font-semibold text-gray-900">Change password</h2>
+          <button type="button" onClick={onClose}
+            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
+            <XMarkIcon className="h-4 w-4" strokeWidth={2} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="px-5 py-4 space-y-4">
+          <div>
+            <label htmlFor="new-pw" className="mb-1.5 block text-sm font-medium text-gray-700">
+              New password
+            </label>
+            <input id="new-pw" type="password" required autoFocus autoComplete="new-password"
+              value={password} onChange={(e) => setPassword(e.target.value)}
+              placeholder="Min. 8 characters" className={inputCls} />
+          </div>
+          <div>
+            <label htmlFor="confirm-pw" className="mb-1.5 block text-sm font-medium text-gray-700">
+              Confirm password
+            </label>
+            <input id="confirm-pw" type="password" required autoComplete="new-password"
+              value={confirm} onChange={(e) => setConfirm(e.target.value)}
+              placeholder="••••••••" className={inputCls} />
+          </div>
+
+          {error && (
+            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button type="button" onClick={onClose}
+              className="flex-1 rounded-lg border border-gray-200 bg-white py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
+              Cancel
+            </button>
+            <Button type="submit" loading={loading} className="flex-1">
+              Update password
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ── User menu dropdown (desktop) ────────────────────────────────────────────
+
+function UserMenuDropdown({
+  userName,
+  email,
+  userInitial,
+  role,
+  onChangePassword,
+  onSignOut,
+}: {
+  userName: string
+  email: string
+  userInitial: string
+  role: string | undefined
+  onChangePassword: () => void
+  onSignOut: () => void
+}) {
+  return (
+    <div className="absolute bottom-full left-0 right-0 mb-1.5 rounded-xl border border-gray-200 bg-white shadow-modal overflow-hidden z-50">
+      {/* User card */}
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-gray-100">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-100 text-sm font-semibold text-brand-700 select-none">
+          {userInitial}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold text-gray-900">{userName}</p>
+          <p className="truncate text-[11px] text-gray-400">{email}</p>
+          {role && (
+            <span className="mt-0.5 inline-block rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+              {ROLE_LABELS[role] ?? role}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div className="p-1">
+        <button
+          onClick={onChangePassword}
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
+        >
+          <KeyIcon className="h-4 w-4 shrink-0 text-gray-400" strokeWidth={2} />
+          Change password
+        </button>
+      </div>
+
+      <div className="border-t border-gray-100 p-1">
+        <button
+          onClick={onSignOut}
+          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors text-left"
+        >
+          <SignOutIcon className="h-4 w-4 shrink-0" strokeWidth={2} />
+          Sign out
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ── AppShell ───────────────────────────────────────────────────────────────
+
 export function AppShell() {
   const { profile, tenantMemberships, activeTenantId } = useAuth()
   const location = useLocation()
-  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerOpen,   setDrawerOpen]   = useState(false)
+  const [menuOpen,     setMenuOpen]     = useState(false)
+  const [changePwOpen, setChangePwOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   const activeMembership = tenantMemberships.find((m) => m.tenant_id === activeTenantId)
   const activeTenant     = activeMembership?.tenant
   const userInitial      = profile?.first_name?.[0]?.toUpperCase() ?? '?'
   const userName         = profile ? `${profile.first_name} ${profile.last_name}` : 'Loading…'
+  const userRole         = activeMembership?.role
 
-  // Field/sub roles only see the Projects nav item
   const isFieldRole = FIELD_ROLES.has(activeMembership?.role ?? '')
   const NAV_ITEMS   = isFieldRole ? FIELD_NAV_ITEMS : ALL_NAV_ITEMS
+
+  // Close the desktop menu on outside click
+  useEffect(() => {
+    if (!menuOpen) return
+    function handleOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [menuOpen])
+
+  async function handleSignOut() {
+    setMenuOpen(false)
+    setDrawerOpen(false)
+    await supabase.auth.signOut()
+  }
+
+  function openChangePassword() {
+    setMenuOpen(false)
+    setDrawerOpen(false)
+    setChangePwOpen(true)
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-surface-1">
@@ -113,17 +293,34 @@ export function AppShell() {
           ))}
         </nav>
 
-        {/* User profile */}
-        <div className="border-t border-gray-200 p-3">
-          <div className="flex items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-gray-50 transition-colors cursor-pointer">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700">
+        {/* User profile — click to open menu */}
+        <div ref={menuRef} className="relative border-t border-gray-200 p-3">
+          {menuOpen && (
+            <UserMenuDropdown
+              userName={userName}
+              email={profile?.email ?? ''}
+              userInitial={userInitial}
+              role={userRole}
+              onChangePassword={openChangePassword}
+              onSignOut={handleSignOut}
+            />
+          )}
+          <button
+            onClick={() => setMenuOpen((o) => !o)}
+            className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 hover:bg-gray-50 transition-colors text-left"
+          >
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700 select-none">
               {userInitial}
             </div>
             <div className="min-w-0 flex-1">
               <p className="truncate text-xs font-medium text-gray-900">{userName}</p>
               <p className="truncate text-[11px] text-gray-400">{profile?.email ?? ''}</p>
             </div>
-          </div>
+            <ChevronDownIcon
+              className={`h-3.5 w-3.5 shrink-0 text-gray-400 transition-transform duration-150 ${menuOpen ? 'rotate-180' : ''}`}
+              strokeWidth={2}
+            />
+          </button>
         </div>
       </aside>
 
@@ -150,10 +347,14 @@ export function AppShell() {
             <BellIcon className="h-5 w-5" />
           </button>
 
-          {/* Mobile user avatar */}
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700 lg:hidden">
+          {/* Mobile user avatar — tapping opens the drawer */}
+          <button
+            onClick={() => setDrawerOpen(true)}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700 lg:hidden"
+            aria-label="Account menu"
+          >
             {userInitial}
-          </div>
+          </button>
         </header>
 
         {/* Page content */}
@@ -223,17 +424,39 @@ export function AppShell() {
               ))}
             </nav>
 
-            {/* User profile */}
-            <div className="border-t border-gray-200 p-3">
+            {/* User section + actions */}
+            <div className="border-t border-gray-200 p-3 space-y-1">
+              {/* User card */}
               <div className="flex items-center gap-2.5 rounded-lg px-2 py-2">
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-100 text-xs font-semibold text-brand-700 select-none">
                   {userInitial}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium text-gray-900">{userName}</p>
+                  <p className="truncate text-xs font-semibold text-gray-900">{userName}</p>
                   <p className="truncate text-[11px] text-gray-400">{profile?.email ?? ''}</p>
+                  {userRole && (
+                    <span className="inline-block rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-500">
+                      {ROLE_LABELS[userRole] ?? userRole}
+                    </span>
+                  )}
                 </div>
               </div>
+
+              {/* Action buttons */}
+              <button
+                onClick={openChangePassword}
+                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors text-left"
+              >
+                <KeyIcon className="h-4 w-4 shrink-0 text-gray-400" strokeWidth={2} />
+                Change password
+              </button>
+              <button
+                onClick={handleSignOut}
+                className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors text-left"
+              >
+                <SignOutIcon className="h-4 w-4 shrink-0" strokeWidth={2} />
+                Sign out
+              </button>
             </div>
           </div>
         </div>
@@ -263,6 +486,9 @@ export function AppShell() {
           )
         })}
       </nav>
+
+      {/* ── Change password modal ─────────────────────────────────────── */}
+      {changePwOpen && <ChangePasswordModal onClose={() => setChangePwOpen(false)} />}
     </div>
   )
 }
