@@ -38,7 +38,7 @@ const PM_AND_ABOVE = new Set(['project_manager', 'admin', 'owner'])
 // Clients are portal-only (portal-invite endpoint).
 const ALLOWED_ROLES = new Set([
   'owner', 'admin', 'project_manager',
-  'field_super', 'field_associate', 'accountant', 'subcontractor',
+  'field_super', 'field_associate', 'accountant', 'designer', 'subcontractor',
 ])
 
 function svcHeaders(extra: Record<string, string> = {}): Record<string, string> {

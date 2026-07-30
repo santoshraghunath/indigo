@@ -57,6 +57,7 @@ const ROLE_LABEL: Record<string, string> = {
   field_super:     'Field Supervisor',
   field_associate: 'Field Associate',
   accountant:      'Accountant',
+  designer:        'Designer',
   subcontractor:   'Subcontractor',
   client:          'Client',
 }
@@ -68,6 +69,7 @@ const ROLE_COLOR: Record<string, string> = {
   field_super:     'bg-blue-50    text-blue-700',
   field_associate: 'bg-sky-50     text-sky-700',
   accountant:      'bg-emerald-50 text-emerald-700',
+  designer:        'bg-violet-50  text-violet-700',
 }
 
 /** Roles that can be assigned via the Invite Employee drawer. */
@@ -77,6 +79,7 @@ const EMPLOYEE_ROLES = [
   { value: 'subcontractor',   label: 'Subcontractor' },
   { value: 'project_manager', label: 'Project Manager' },
   { value: 'accountant',      label: 'Accountant' },
+  { value: 'designer',        label: 'Designer' },
   { value: 'admin',           label: 'Admin' },
   { value: 'owner',           label: 'Owner' },
 ]

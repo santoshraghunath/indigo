@@ -13,23 +13,27 @@ interface Tab {
 
 const EMPLOYEE_TABS    = new Set(['Overview', 'Schedule', 'Clock'])
 const SUB_VISIBLE_TABS = new Set(['Overview', 'Schedule', 'Field'])
+const DESIGNER_TABS    = new Set(['Overview', 'RFIs', 'Schedule', 'Documents'])
 
 function tabs(id: string, role: string | null): Tab[] {
   const all: Tab[] = [
     { to: `/projects/${id}/overview`,    label: 'Overview',    live: true },
+    { to: `/projects/${id}/rfis`,        label: 'RFIs',        live: true },
     { to: `/projects/${id}/schedule`,    label: 'Schedule',    live: true },
-    { to: `/projects/${id}/financials`,  label: 'Financials', live: true },
-    { to: `/projects/${id}/documents`,   label: 'Documents',  live: true },
-    { to: `/projects/${id}/field`,       label: 'Field',  live: true },
-    { to: `/projects/${id}/subs`,        label: 'Subs',   live: true },
-    { to: `/projects/${id}/client`,      label: 'Client', live: true },
-    { to: `/projects/${id}/clock`,       label: 'Clock',      live: true },
-    { to: `/projects/${id}/selections`,  label: 'Selections', live: true },
+    { to: `/projects/${id}/financials`,  label: 'Financials',  live: true },
+    { to: `/projects/${id}/documents`,   label: 'Documents',   live: true },
+    { to: `/projects/${id}/field`,       label: 'Field',       live: true },
+    { to: `/projects/${id}/subs`,        label: 'Subs',        live: true },
+    { to: `/projects/${id}/client`,      label: 'Client',      live: true },
+    { to: `/projects/${id}/clock`,       label: 'Clock',       live: true },
+    { to: `/projects/${id}/selections`,  label: 'Selections',  live: true },
   ]
   if (role === 'field_associate' || role === 'field_super')
     return all.filter((t) => EMPLOYEE_TABS.has(t.label))
   if (role === 'subcontractor')
     return all.filter((t) => SUB_VISIBLE_TABS.has(t.label))
+  if (role === 'designer')
+    return all.filter((t) => DESIGNER_TABS.has(t.label))
   return all
 }
 

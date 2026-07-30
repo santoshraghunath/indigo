@@ -50,7 +50,8 @@ const FIELD_NAV_ITEMS: NavItem[] = [
   { to: '/projects', label: 'Projects', Icon: FolderIcon },
 ]
 
-const FIELD_ROLES = new Set(['field_associate', 'field_super', 'subcontractor'])
+const FIELD_ROLES    = new Set(['field_associate', 'field_super', 'subcontractor'])
+const DESIGNER_ROLES = new Set(['designer'])
 
 const ROLE_LABELS: Record<string, string> = {
   owner:           'Owner',
@@ -59,6 +60,7 @@ const ROLE_LABELS: Record<string, string> = {
   field_super:     'Field Supervisor',
   field_associate: 'Field Associate',
   accountant:      'Accountant',
+  designer:        'Designer',
   subcontractor:   'Subcontractor',
   client:          'Client',
 }
@@ -242,8 +244,9 @@ export function AppShell() {
   const userName         = profile ? `${profile.first_name} ${profile.last_name}` : 'Loading…'
   const userRole         = activeMembership?.role
 
-  const isFieldRole = FIELD_ROLES.has(activeMembership?.role ?? '')
-  const NAV_ITEMS   = isFieldRole ? FIELD_NAV_ITEMS : ALL_NAV_ITEMS
+  const isFieldRole    = FIELD_ROLES.has(activeMembership?.role ?? '')
+  const isDesignerRole = DESIGNER_ROLES.has(activeMembership?.role ?? '')
+  const NAV_ITEMS      = (isFieldRole || isDesignerRole) ? FIELD_NAV_ITEMS : ALL_NAV_ITEMS
 
   // Close the desktop menu on outside click
   useEffect(() => {

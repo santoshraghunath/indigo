@@ -776,18 +776,50 @@ export async function getProjectDocumentDownload(
 
 export interface ProjectRfi {
   id: string
+  tenant_id: string
+  project_id: string
   number: number
   subject: string
   question: string
   answer: string | null
   status: string
   priority: string
+  submitted_by: string | null
+  assigned_to: string | null
   due_date: string | null
   submitted_at: string | null
   answered_at: string | null
   cost_impact_cents: number | null
   schedule_impact_days: number | null
+  document_ids: string[]
+  clarification_request: string | null
+  clarification_response: string | null
   created_at: string
+  updated_at: string
+  submitted_by_profile: { first_name: string | null; last_name: string | null } | null
+  assigned_to_profile: { first_name: string | null; last_name: string | null } | null
+}
+
+export interface CreateRfiInput {
+  project_id: string
+  tenant_id: string
+  subject: string
+  question: string
+  priority?: string
+  assigned_to?: string | null
+  due_date?: string | null
+  cost_impact_cents?: number | null
+  schedule_impact_days?: number | null
+}
+
+export interface UpdateRfiInput {
+  subject?: string
+  question?: string
+  priority?: string
+  assigned_to?: string | null
+  due_date?: string | null
+  cost_impact_cents?: number | null
+  schedule_impact_days?: number | null
 }
 
 export interface ProjectPunchItem {
@@ -977,7 +1009,7 @@ export async function getProjectFieldData(
   const [rfisRes, punchRes, submittalsRes, logsRes] = await Promise.all([
     client
       .from('rfis')
-      .select('id, number, subject, question, answer, status, priority, due_date, submitted_at, answered_at, cost_impact_cents, schedule_impact_days, created_at')
+      .select('id, tenant_id, project_id, number, subject, question, answer, status, priority, submitted_by, assigned_to, due_date, submitted_at, answered_at, cost_impact_cents, schedule_impact_days, document_ids, clarification_request, clarification_response, created_at, updated_at, submitted_by_profile:user_profiles!rfis_submitted_by_fkey(first_name,last_name), assigned_to_profile:user_profiles!rfis_assigned_to_fkey(first_name,last_name)')
       .eq('project_id', projectId)
       .eq('tenant_id', tenantId)
       .order('number', { ascending: false }),
@@ -1017,6 +1049,211 @@ export async function getProjectFieldData(
     /** Internal field-associate and subcontractor reports */
     internalReports: allLogs.filter((l) => l.log_type !== 'summary'),
   }
+}
+
+// ── RFI assignees ──────────────────────────────────────────────────────────
+
+export interface RfiAssignee {
+  id: string
+  name: string
+  email: string | null
+  role: string
+}
+
+interface RawMember {
+  user_id: string
+  role: string
+  user_profiles: { first_name: string | null; last_name: string | null; email: string | null }
+}
+
+interface RawCustomer {
+  portal_user_id: string | null
+  customer_name: string | null
+  email: string | null
+}
+
+export async function getProjectRfiAssignees(
+  client: SupabaseClient,
+  tenantId: string,
+  jobId: string,
+): Promise<RfiAssignee[]> {
+  const [membersRes, clientsRes] = await Promise.all([
+    client
+      .from('tenant_members')
+      .select('user_id, role, user_profiles!inner(first_name, last_name, email)')
+      .eq('tenant_id', tenantId)
+      .eq('is_active', true)
+      .order('role'),
+    client
+      .from('customers')
+      .select('portal_user_id, customer_name, email')
+      .eq('job_id', jobId)
+      .not('portal_user_id', 'is', null),
+  ])
+
+  const rawMembers = (membersRes.data ?? []) as unknown as RawMember[]
+  const rawClients = (clientsRes.data ?? []) as unknown as RawCustomer[]
+
+  const staff: RfiAssignee[] = rawMembers.map((m) => ({
+    id:    m.user_id,
+    name:  [m.user_profiles.first_name, m.user_profiles.last_name].filter(Boolean).join(' ') || m.user_id,
+    email: m.user_profiles.email,
+    role:  m.role,
+  }))
+
+  const clients: RfiAssignee[] = rawClients
+    .filter((c): c is RawCustomer & { portal_user_id: string } => !!c.portal_user_id)
+    .map((c) => ({
+      id:    c.portal_user_id,
+      name:  c.customer_name ?? 'Client',
+      email: c.email,
+      role:  'client',
+    }))
+
+  return [...staff, ...clients]
+}
+
+// ── RFI CRUD ───────────────────────────────────────────────────────────────
+
+const RFI_SELECT =
+  'id, tenant_id, project_id, number, subject, question, answer, status, priority, ' +
+  'submitted_by, assigned_to, due_date, submitted_at, answered_at, ' +
+  'cost_impact_cents, schedule_impact_days, document_ids, ' +
+  'clarification_request, clarification_response, created_at, updated_at, ' +
+  'submitted_by_profile:user_profiles!rfis_submitted_by_fkey(first_name,last_name), ' +
+  'assigned_to_profile:user_profiles!rfis_assigned_to_fkey(first_name,last_name)'
+
+export async function getProjectRfis(
+  client: SupabaseClient,
+  projectId: string,
+  tenantId: string,
+): Promise<ProjectRfi[]> {
+  const { data, error } = await client
+    .from('rfis')
+    .select(RFI_SELECT)
+    .eq('project_id', projectId)
+    .eq('tenant_id', tenantId)
+    .order('number', { ascending: false })
+  if (error) throw error
+  return (data ?? []) as unknown as ProjectRfi[]
+}
+
+export async function createRfi(
+  client: SupabaseClient,
+  input: CreateRfiInput,
+): Promise<ProjectRfi> {
+  const { data, error } = await client
+    .from('rfis')
+    .insert({
+      project_id:           input.project_id,
+      tenant_id:            input.tenant_id,
+      number:               0,
+      subject:              input.subject,
+      question:             input.question,
+      priority:             input.priority ?? 'normal',
+      assigned_to:          input.assigned_to ?? null,
+      due_date:             input.due_date ?? null,
+      cost_impact_cents:    input.cost_impact_cents ?? null,
+      schedule_impact_days: input.schedule_impact_days ?? null,
+      status:               'draft',
+    } as never)
+    .select(RFI_SELECT)
+    .single()
+  if (error) throw error
+  return data as unknown as ProjectRfi
+}
+
+export async function updateRfi(
+  client: SupabaseClient,
+  id: string,
+  input: UpdateRfiInput,
+): Promise<void> {
+  const { error } = await client
+    .from('rfis')
+    .update(input as never)
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function submitRfi(
+  client: SupabaseClient,
+  id: string,
+  submittedBy: string,
+): Promise<void> {
+  const { error } = await client
+    .from('rfis')
+    .update({ status: 'submitted', submitted_at: new Date().toISOString(), submitted_by: submittedBy } as never)
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function answerRfi(
+  client: SupabaseClient,
+  id: string,
+  answer: string,
+  documentIds?: string[],
+  costImpactCents?: number | null,
+  scheduleImpactDays?: number | null,
+): Promise<void> {
+  const payload: Record<string, unknown> = {
+    answer,
+    status:      'answered',
+    answered_at: new Date().toISOString(),
+  }
+  if (documentIds !== undefined) payload.document_ids = documentIds
+  if (costImpactCents !== undefined) payload.cost_impact_cents = costImpactCents
+  if (scheduleImpactDays !== undefined) payload.schedule_impact_days = scheduleImpactDays
+  const { error } = await client
+    .from('rfis')
+    .update(payload as never)
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function requestRfiClarification(
+  client: SupabaseClient,
+  id: string,
+  clarificationRequest: string,
+): Promise<void> {
+  const { error } = await client
+    .from('rfis')
+    .update({ clarification_request: clarificationRequest, status: 'under_review' } as never)
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function respondToRfiClarification(
+  client: SupabaseClient,
+  id: string,
+  clarificationResponse: string,
+): Promise<void> {
+  const { error } = await client
+    .from('rfis')
+    .update({ clarification_response: clarificationResponse, status: 'submitted' } as never)
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function closeRfi(
+  client: SupabaseClient,
+  id: string,
+): Promise<void> {
+  const { error } = await client
+    .from('rfis')
+    .update({ status: 'closed' } as never)
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function voidRfi(
+  client: SupabaseClient,
+  id: string,
+): Promise<void> {
+  const { error } = await client
+    .from('rfis')
+    .update({ status: 'void' } as never)
+    .eq('id', id)
+  if (error) throw error
 }
 
 // ── Subs queries ───────────────────────────────────────────────────────────

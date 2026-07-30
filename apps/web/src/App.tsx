@@ -21,6 +21,7 @@ import { SubsTab } from '@/features/projects/tabs/SubsTab'
 import { ClientTab } from '@/features/projects/tabs/ClientTab'
 import { ClockTab } from '@/features/projects/tabs/ClockTab'
 import { SelectionsTab } from '@/features/projects/tabs/SelectionsTab'
+import { RfisTab } from '@/features/projects/tabs/RfisTab'
 import { ReportsPage } from '@/features/reports/ReportsPage'
 import { EmployeesPage } from '@/features/employees/EmployeesPage'
 import { SubcontractorsPage } from '@/features/subcontractors/SubcontractorsPage'
@@ -119,6 +120,7 @@ function AuthRoutes() {
         <Route path="projects/:id"    element={<ProjectDetailPage />}>
           <Route index                element={<Navigate to="overview" replace />} />
           <Route path="overview"      element={<OverviewTab />} />
+          <Route path="rfis"          element={<RfisTab />} />
           <Route path="schedule"      element={<ScheduleTab />} />
           <Route path="financials"    element={<FinancialsTab />} />
           <Route path="documents"     element={<DocumentsTab />} />
