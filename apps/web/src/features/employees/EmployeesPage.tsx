@@ -674,6 +674,111 @@ function EmployeeDetail({
   )
 }
 
+// ── Employee management actions ───────────────────────────────────────────
+
+function EmployeeActions({
+  employee,
+  canManageWages,
+  compact = false,
+  onWageEdit,
+  onEdit,
+  onToggleActive,
+  onPasswordReset,
+}: {
+  employee: TenantEmployee
+  canManageWages: boolean
+  compact?: boolean
+  onWageEdit: (emp: TenantEmployee) => void
+  onEdit: (emp: TenantEmployee) => void
+  onToggleActive: (emp: TenantEmployee) => void
+  onPasswordReset: (emp: TenantEmployee) => void
+}) {
+  if (compact) {
+    return (
+      <div className="grid grid-cols-2 gap-2" onClick={(e) => e.stopPropagation()}>
+        {canManageWages && (
+          <button
+            type="button"
+            onClick={() => onWageEdit(employee)}
+            className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 shadow-sm hover:bg-gray-50 hover:text-brand-700 transition-colors"
+          >
+            <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
+            Set Wage
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => onEdit(employee)}
+          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 shadow-sm hover:bg-gray-50 hover:text-gray-900 transition-colors"
+        >
+          Edit Profile
+        </button>
+        <button
+          type="button"
+          onClick={() => onToggleActive(employee)}
+          className={`rounded-lg border px-3 py-2 text-xs font-medium shadow-sm transition-colors ${
+            employee.is_active
+              ? 'border-red-100 bg-white text-red-600 hover:bg-red-50'
+              : 'border-green-100 bg-white text-green-700 hover:bg-green-50'
+          }`}
+        >
+          {employee.is_active ? 'Deactivate' : 'Reactivate'}
+        </button>
+        <button
+          type="button"
+          onClick={() => onPasswordReset(employee)}
+          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 shadow-sm hover:bg-gray-50 hover:text-gray-900 transition-colors"
+        >
+          Reset Password
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex shrink-0 items-center gap-1" onClick={(e) => e.stopPropagation()}>
+      {canManageWages && (
+        <button
+          type="button"
+          title="Set wage"
+          onClick={() => onWageEdit(employee)}
+          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-brand-600 transition-colors"
+        >
+          <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
+        </button>
+      )}
+      <button
+        type="button"
+        title="Edit profile"
+        onClick={() => onEdit(employee)}
+        className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
+      >
+        Edit
+      </button>
+      <button
+        type="button"
+        title={employee.is_active ? 'Deactivate' : 'Reactivate'}
+        onClick={() => onToggleActive(employee)}
+        className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+          employee.is_active
+            ? 'text-red-500 hover:bg-red-50'
+            : 'text-green-600 hover:bg-green-50'
+        }`}
+      >
+        {employee.is_active ? 'Deactivate' : 'Reactivate'}
+      </button>
+      <button
+        type="button"
+        title="Send password reset email"
+        onClick={() => onPasswordReset(employee)}
+        className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
+      >
+        Reset PW
+      </button>
+    </div>
+  )
+}
+
 // ── Employee card ──────────────────────────────────────────────────────────
 
 function EmployeeCard({
@@ -736,45 +841,15 @@ function EmployeeCard({
 
         {/* Action buttons (stop propagation so they don't toggle expand) */}
         {canManageThis && (
-          <div className="hidden shrink-0 items-center gap-1 sm:flex" onClick={(e) => e.stopPropagation()}>
-            {canManageWages && (
-              <button
-                type="button"
-                title="Set wage"
-                onClick={() => onWageEdit(employee)}
-                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-brand-600 transition-colors"
-              >
-                <PencilIcon className="h-3.5 w-3.5" strokeWidth={2} />
-              </button>
-            )}
-            <button
-              type="button"
-              title="Edit profile"
-              onClick={() => onEdit(employee)}
-              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              title={employee.is_active ? 'Deactivate' : 'Reactivate'}
-              onClick={() => onToggleActive(employee)}
-              className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
-                employee.is_active
-                  ? 'text-red-500 hover:bg-red-50'
-                  : 'text-green-600 hover:bg-green-50'
-              }`}
-            >
-              {employee.is_active ? 'Deactivate' : 'Reactivate'}
-            </button>
-            <button
-              type="button"
-              title="Send password reset email"
-              onClick={() => onPasswordReset(employee)}
-              className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition-colors"
-            >
-              Reset PW
-            </button>
+          <div className="hidden sm:block">
+            <EmployeeActions
+              employee={employee}
+              canManageWages={canManageWages}
+              onWageEdit={onWageEdit}
+              onEdit={onEdit}
+              onToggleActive={onToggleActive}
+              onPasswordReset={onPasswordReset}
+            />
           </div>
         )}
 
@@ -783,6 +858,20 @@ function EmployeeCard({
           strokeWidth={2}
         />
       </div>
+
+      {canManageThis && (
+        <div className="border-t border-gray-100 bg-gray-50/60 px-5 py-3 sm:hidden">
+          <EmployeeActions
+            employee={employee}
+            canManageWages={canManageWages}
+            compact
+            onWageEdit={onWageEdit}
+            onEdit={onEdit}
+            onToggleActive={onToggleActive}
+            onPasswordReset={onPasswordReset}
+          />
+        </div>
+      )}
 
       {/* Expanded detail */}
       {expanded && (
