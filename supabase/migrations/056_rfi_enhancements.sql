@@ -30,15 +30,17 @@ create trigger assign_rfi_number_trigger
   for each row execute function assign_rfi_number();
 
 -- 4. RLS: designers can UPDATE rfis assigned to them (answer, clarification_request, status).
+--    Uses "in (select ...)" form — direct set-returning function calls are not
+--    allowed in policy expressions in PostgreSQL.
 create policy "designers update assigned rfis" on rfis
   for update
   using (
-    tenant_id = any(get_user_tenant_ids()) and
+    tenant_id in (select get_user_tenant_ids()) and
     assigned_to = auth.uid() and
     get_user_role(tenant_id) = 'designer'
   )
   with check (
-    tenant_id = any(get_user_tenant_ids()) and
+    tenant_id in (select get_user_tenant_ids()) and
     assigned_to = auth.uid()
   );
 
@@ -71,8 +73,7 @@ create policy "portal clients update assigned rfis" on rfis
   );
 
 -- 7. Storage: designers can upload to the project-documents bucket.
---    The existing "tenant staff upload project documents" policy requires field_super+;
---    this adds a parallel policy covering the designer role.
+--    Avoids set-returning functions by checking tenant_members directly.
 do $$ begin
   drop policy if exists "designers upload project documents" on storage.objects;
 exception when undefined_object then null; end $$;
@@ -80,12 +81,12 @@ exception when undefined_object then null; end $$;
 create policy "designers upload project documents" on storage.objects
   for insert with check (
     bucket_id = 'project-documents' and
-    (storage.foldername(name))[1] in (
-      select id::text from tenants where id = any(get_user_tenant_ids())
-    ) and
-    get_user_role(
-      (select id from tenants
-       where id::text = (storage.foldername(name))[1]
-       limit 1)
-    ) = 'designer'
+    exists (
+      select 1
+      from tenant_members tm
+      where tm.tenant_id::text = (storage.foldername(name))[1]
+        and tm.user_id = auth.uid()
+        and tm.role = 'designer'
+        and tm.is_active = true
+    )
   );
