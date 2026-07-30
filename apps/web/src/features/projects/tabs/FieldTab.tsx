@@ -2738,7 +2738,6 @@ export function FieldTab() {
         role={role}
       />
 
-      <RfisSection rfis={rfis} />
       <PunchListSection
         items={punchItems}
         projectId={projectId!}
