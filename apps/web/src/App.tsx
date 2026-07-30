@@ -8,6 +8,7 @@ import { AppShell } from '@/components/AppShell'
 import { ToastProvider } from '@/components/ui/Toast'
 import { LoginPage } from '@/features/auth/LoginPage'
 import { WelcomePage } from '@/features/auth/WelcomePage'
+import { ResetPasswordPage } from '@/features/auth/ResetPasswordPage'
 import { DashboardPage } from '@/features/dashboard/DashboardPage'
 import { ProjectsPage } from '@/features/projects/ProjectsPage'
 import { ProjectDetailPage } from '@/features/projects/ProjectDetailPage'
@@ -81,15 +82,21 @@ function AuthRoutes() {
   // (they carry customer_id in user_metadata) and route them to /portal;
   // staff invites go to /welcome. The hash is forwarded intact so
   // detectSessionInUrl can establish the session before the target page loads.
-  const isInviteFlow = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('type') === 'invite'
-  if (isInviteFlow) {
-    const token = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('access_token')
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+  const hashType   = hashParams.get('type')
+
+  if (hashType === 'invite') {
+    const token = hashParams.get('access_token')
     let isPortalInvite = false
     try {
       const payload = JSON.parse(atob(token!.split('.')[1]))
       isPortalInvite = !!payload?.user_metadata?.customer_id
     } catch { /* malformed JWT — treat as staff invite */ }
     return <Navigate to={(isPortalInvite ? '/portal' : '/welcome') + window.location.hash} replace />
+  }
+
+  if (hashType === 'recovery') {
+    return <Navigate to={'/reset-password' + window.location.hash} replace />
   }
 
   const activeMembership = tenantMemberships.find((m) => m.tenant_id === activeTenantId)
@@ -227,6 +234,8 @@ export function App() {
         <Routes>
           {/* First-time invite acceptance — outside all auth guards */}
           <Route path="/welcome" element={<WelcomeRoute />} />
+          {/* Password reset — outside auth guards so the recovery session can set a new password */}
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           {/* Customer portal — separate auth context */}
           <Route path="/portal/*" element={<PortalRoutes />} />
           {/* Staff app */}

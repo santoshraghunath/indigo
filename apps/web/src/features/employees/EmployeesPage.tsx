@@ -870,7 +870,7 @@ export function EmployeesPage() {
       const email = emp.profile?.email
       if (!email) throw new Error('No email on file')
       return supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/`,
+        redirectTo: `${window.location.origin}/reset-password`,
       })
     },
     onSuccess: () => {
