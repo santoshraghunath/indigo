@@ -1011,7 +1011,125 @@ function PhaseCard({
 const LEFT_COL_W = 180
 const PX_PER_DAY = 14   // pixels per calendar day — adjust for zoom feel
 
-function GanttView({ phases }: { phases: ProjectPhase[] }) {
+type ToPxFn = (dateStr: string | null | undefined, offsetDays?: number) => number
+
+// ── Draggable/resizable phase bar (Gantt view) ──────────────────────────────
+
+function PhaseGanttBar({
+  phase,
+  accentColor,
+  toPx,
+  canEdit,
+  onCommit,
+}: {
+  phase: ProjectPhase
+  accentColor: string
+  toPx: ToPxFn
+  canEdit: boolean
+  onCommit: (phaseId: string, startDate: string, endDate: string) => void
+}) {
+  const [preview, setPreview] = useState<{ start: string; end: string } | null>(null)
+  const dragRef = useRef<{
+    mode: 'move' | 'resize-left' | 'resize-right'
+    startX: number
+    origStart: string
+    origEnd: string
+    latest: { start: string; end: string }
+  } | null>(null)
+
+  function beginDrag(mode: 'move' | 'resize-left' | 'resize-right', e: React.PointerEvent) {
+    if (!canEdit || !phase.start_date || !phase.end_date) return
+    e.preventDefault()
+    e.stopPropagation()
+    const origStart = phase.start_date
+    const origEnd   = phase.end_date
+    dragRef.current = { mode, startX: e.clientX, origStart, origEnd, latest: { start: origStart, end: origEnd } }
+    setPreview({ start: origStart, end: origEnd })
+    document.body.style.userSelect = 'none'
+
+    function handleMove(ev: PointerEvent) {
+      const d = dragRef.current
+      if (!d) return
+      const deltaDays = Math.round((ev.clientX - d.startX) / PX_PER_DAY)
+      let newStart = d.origStart
+      let newEnd   = d.origEnd
+      if (d.mode === 'move') {
+        newStart = addDays(d.origStart, deltaDays)
+        newEnd   = addDays(d.origEnd, deltaDays)
+      } else if (d.mode === 'resize-left') {
+        newStart = addDays(d.origStart, deltaDays)
+        if (newStart > d.origEnd) newStart = d.origEnd
+      } else {
+        newEnd = addDays(d.origEnd, deltaDays)
+        if (newEnd < d.origStart) newEnd = d.origStart
+      }
+      d.latest = { start: newStart, end: newEnd }
+      setPreview(d.latest)
+    }
+
+    function handleUp() {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      document.body.style.userSelect = ''
+      const d = dragRef.current
+      dragRef.current = null
+      setPreview(null)
+      if (d && (d.latest.start !== d.origStart || d.latest.end !== d.origEnd)) {
+        onCommit(phase.id, d.latest.start, d.latest.end)
+      }
+    }
+
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+  }
+
+  const displayStart = preview?.start ?? phase.start_date
+  const displayEnd   = preview?.end   ?? phase.end_date
+  const hasBar       = !!(displayStart && displayEnd)
+  if (!hasBar) return null
+
+  const barLeft  = toPx(displayStart)
+  const barRight = toPx(displayEnd, 1)
+  const barWidth = Math.max(barRight - barLeft, 4)
+
+  return (
+    <div
+      className={`absolute top-1/2 h-6 -translate-y-1/2 touch-none rounded-md transition-shadow ${
+        canEdit ? 'cursor-grab active:cursor-grabbing' : ''
+      } ${preview ? 'shadow-lg ring-2 ring-white' : ''}`}
+      style={{ left: barLeft, width: barWidth, backgroundColor: accentColor, opacity: preview ? 1 : 0.85 }}
+      onPointerDown={(e) => beginDrag('move', e)}
+      title={
+        canEdit
+          ? `${fmtDateShort(displayStart)} → ${fmtDateShort(displayEnd)} — drag to move, edges to resize`
+          : `${fmtDateShort(displayStart)} → ${fmtDateShort(displayEnd)}`
+      }
+    >
+      {canEdit && (
+        <>
+          <div
+            className="absolute inset-y-0 left-0 w-2 touch-none cursor-ew-resize rounded-l-md hover:bg-black/10"
+            onPointerDown={(e) => beginDrag('resize-left', e)}
+          />
+          <div
+            className="absolute inset-y-0 right-0 w-2 touch-none cursor-ew-resize rounded-r-md hover:bg-black/10"
+            onPointerDown={(e) => beginDrag('resize-right', e)}
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
+function GanttView({
+  phases,
+  canEdit,
+  onPhaseDatesChange,
+}: {
+  phases: ProjectPhase[]
+  canEdit: boolean
+  onPhaseDatesChange: (phaseId: string, startDate: string, endDate: string) => void
+}) {
   const sorted = [...phases].sort((a, b) => a.sequence - b.sequence)
 
   const allDates: Date[] = []
@@ -1134,10 +1252,6 @@ function GanttView({ phases }: { phases: ProjectPhase[] }) {
               {sorted.map((phase) => {
                 const accentColor = phase.color ?? PHASE_ACCENT[phase.status] ?? '#d1d5db'
                 const cfg         = PHASE_STATUS[phase.status] ?? PHASE_STATUS.not_started
-                const hasBar      = !!(phase.start_date && phase.end_date)
-                const barLeft     = hasBar ? toPx(phase.start_date) : -1
-                const barRight    = hasBar ? toPx(phase.end_date, 1) : -1
-                const barWidth    = hasBar ? Math.max(barRight - barLeft, 4) : 0
                 const milestones  = phase.milestones.filter((m) => m.due_date)
 
                 return (
@@ -1155,13 +1269,14 @@ function GanttView({ phases }: { phases: ProjectPhase[] }) {
                       {showToday && (
                         <div className="absolute inset-y-0 w-px bg-red-300" style={{ left: todayPx }} />
                       )}
-                      {/* Phase duration bar */}
-                      {hasBar && (
-                        <div
-                          className="absolute top-1/2 h-6 -translate-y-1/2 rounded-md"
-                          style={{ left: barLeft, width: barWidth, backgroundColor: accentColor, opacity: 0.85 }}
-                        />
-                      )}
+                      {/* Phase duration bar — draggable to move, edges resizable */}
+                      <PhaseGanttBar
+                        phase={phase}
+                        accentColor={accentColor}
+                        toPx={toPx}
+                        canEdit={canEdit}
+                        onCommit={onPhaseDatesChange}
+                      />
                       {/* Milestone diamonds */}
                       {milestones.map((m) => {
                         const mp      = toPx(m.due_date)
@@ -2067,6 +2182,34 @@ export function ScheduleTab() {
     }
   }
 
+  // Drag-to-move / drag-to-resize a phase bar directly in the Gantt view
+  const resizePhaseMut = useMutation({
+    mutationFn: ({ phase, startDate, endDate }: { phase: ProjectPhase; startDate: string; endDate: string }) =>
+      upsertPhase(supabase, tenantId, projectId!, {
+        id:          phase.id,
+        name:        phase.name,
+        status:      phase.status,
+        start_date:  startDate,
+        end_date:    endDate,
+        color:       phase.color,
+        description: phase.description,
+        sequence:    phase.sequence,
+      }),
+    onError: (err) => {
+      toast.error('Failed to update phase dates', err instanceof Error ? err.message : 'Try again.')
+      refresh()
+    },
+  })
+
+  function handlePhaseDatesChange(phaseId: string, startDate: string, endDate: string) {
+    const phase = sorted.find((p) => p.id === phaseId)
+    if (!phase) return
+    queryClient.setQueryData<ProjectPhase[]>(['project-phases', projectId], (old) =>
+      old?.map((p) => (p.id === phaseId ? { ...p, start_date: startDate, end_date: endDate } : p)),
+    )
+    resizePhaseMut.mutate({ phase, startDate, endDate })
+  }
+
   // Cascade apply mutation — looks up full milestone data to preserve all existing fields
   const cascadeMut = useMutation({
     mutationFn: async (changes: MilestoneCascadeChange[]) => {
@@ -2176,7 +2319,7 @@ export function ScheduleTab() {
               </SortableContext>
             </DndContext>
           ) : (
-            <GanttView phases={sorted} />
+            <GanttView phases={sorted} canEdit={canEdit} onPhaseDatesChange={handlePhaseDatesChange} />
           )}
         </>
       )}
