@@ -2196,6 +2196,25 @@ export async function setDailyLogClientVisible(
  * Idempotent: if a report already exists for (project, date, author), updates
  * the work_performed text.  Returns the log id in both cases.
  */
+/** Looks up an existing worker report for (project, date, author). */
+async function findWorkerDailyReport(
+  client: SupabaseClient,
+  projectId: string,
+  userId: string,
+  date: string,
+): Promise<{ id: string } | null> {
+  const { data, error } = await client
+    .from('daily_logs')
+    .select('id')
+    .eq('project_id', projectId)
+    .eq('date', date)
+    .eq('author_id', userId)
+    .in('log_type', ['field_associate', 'subcontractor'])
+    .maybeSingle() as unknown as { data: { id: string } | null; error: { message: string } | null }
+  if (error) throw error
+  return data
+}
+
 export async function upsertWorkerDailyReport(
   client: SupabaseClient,
   tenantId: string,
@@ -2205,15 +2224,12 @@ export async function upsertWorkerDailyReport(
   date: string,
   workPerformed: string,
 ): Promise<{ id: string }> {
-  // Check for an existing report from this worker on this date
-  const { data: existing } = await client
-    .from('daily_logs')
-    .select('id')
-    .eq('project_id', projectId)
-    .eq('date', date)
-    .eq('author_id', userId)
-    .in('log_type', ['field_associate', 'subcontractor'])
-    .maybeSingle() as unknown as { data: { id: string } | null }
+  // Check for an existing report from this worker on this date. A failure
+  // here must not be treated as "no existing report" — silently swallowing
+  // it previously caused a duplicate-key error below whenever the lookup
+  // itself failed (e.g. a transient RLS/network hiccup) even though a row
+  // from an earlier attempt already existed.
+  const existing = await findWorkerDailyReport(client, projectId, userId, date)
 
   if (existing) {
     const { error } = await client
@@ -2237,7 +2253,25 @@ export async function upsertWorkerDailyReport(
     } as unknown as never)
     .select('id')
     .single()
-  if (error) throw error
+
+  if (error) {
+    // Defensive fallback for the unique_violation race: another attempt
+    // (e.g. this same user's earlier, apparently-failed submission) already
+    // created today's report. Update that row instead of surfacing a raw
+    // duplicate-key error.
+    if ((error as { code?: string }).code === '23505') {
+      const raceExisting = await findWorkerDailyReport(client, projectId, userId, date)
+      if (raceExisting) {
+        const { error: updateError } = await client
+          .from('daily_logs')
+          .update({ work_performed: workPerformed } as unknown as never)
+          .eq('id', raceExisting.id)
+        if (updateError) throw updateError
+        return { id: raceExisting.id }
+      }
+    }
+    throw error
+  }
   return data as { id: string }
 }
 
@@ -2310,6 +2344,12 @@ export interface CreateSummaryLogInput {
 /**
  * Creates a client-facing summary daily log (log_type='summary').
  * Optionally links photos from worker reports to the new log.
+ *
+ * The log row is committed as soon as the insert succeeds; if linking the
+ * selected photos afterward fails, that failure is reported back via
+ * `photoLinkError` rather than thrown, so callers don't mistake an
+ * already-saved log for a failed one (which previously left an invisible,
+ * unrecoverable row behind — see FieldTab.tsx's daily-log mutations).
  */
 export async function createSummaryLog(
   client: SupabaseClient,
@@ -2317,7 +2357,7 @@ export async function createSummaryLog(
   projectId: string,
   userId: string,
   input: CreateSummaryLogInput,
-): Promise<{ id: string }> {
+): Promise<{ id: string; photoLinkError: string | null }> {
   const { data, error } = await client
     .from('daily_logs')
     .insert({
@@ -2352,10 +2392,10 @@ export async function createSummaryLog(
     const { error: photoErr } = await client
       .from('daily_log_photos')
       .insert(photoRows as unknown as never)
-    if (photoErr) throw photoErr
+    if (photoErr) return { id: logId, photoLinkError: photoErr.message }
   }
 
-  return { id: logId }
+  return { id: logId, photoLinkError: null }
 }
 
 // ── Draw schedule mutations ────────────────────────────────────────────────

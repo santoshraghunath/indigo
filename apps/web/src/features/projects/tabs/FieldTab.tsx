@@ -66,6 +66,22 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
+/**
+ * Uploads photos independently (one failure doesn't block the rest) and
+ * returns how many failed. A daily log's own record is already saved by the
+ * time this runs, so a photo failure here must never be treated as a reason
+ * to hide or roll back that record — only reported back to the user.
+ */
+async function uploadPhotosSettled(uploads: Promise<unknown>[]): Promise<{ failed: number; total: number }> {
+  const results = await Promise.allSettled(uploads)
+  return { failed: results.filter((r) => r.status === 'rejected').length, total: results.length }
+}
+
+function photoUploadWarning(failed: number, total: number): string | null {
+  if (failed === 0) return null
+  return `${failed} of ${total} photo${total !== 1 ? 's' : ''} failed to upload. The rest of your entry was saved.`
+}
+
 function fmtAuthorName(profile: { first_name: string | null; last_name: string | null } | null | undefined): string {
   return [profile?.first_name, profile?.last_name].filter(Boolean).join(' ') || 'Worker'
 }
@@ -666,9 +682,13 @@ function LogPhotoGallery({
 
     setUploading(true)
     try {
-      await Promise.all(valid.map((f) => uploadDailyLogPhoto(supabase, tenantId, projectId, logId, userId, f)))
+      const { failed, total } = await uploadPhotosSettled(
+        valid.map((f) => uploadDailyLogPhoto(supabase, tenantId, projectId, logId, userId, f)),
+      )
       invalidate()
-      toast.success(`${valid.length} photo${valid.length > 1 ? 's' : ''} added`)
+      const warning = photoUploadWarning(failed, total)
+      if (warning) toast.error(warning)
+      else toast.success(`${valid.length} photo${valid.length > 1 ? 's' : ''} added`)
     } catch (e) {
       toast.error((e as Error).message)
     } finally {
@@ -850,10 +870,14 @@ function WorkerReportModal({ projectId, tenantId, userId, role, onSuccess, onClo
       const { id: logId } = await upsertWorkerDailyReport(
         supabase, tenantId, projectId, userId, logType, todayIso(), workPerformed.trim(),
       )
-      await Promise.all(
+      // The report row above is already saved — a photo failure below must
+      // not make it disappear from the app, so onSuccess() always still runs.
+      const { failed, total } = await uploadPhotosSettled(
         stagedPhotos.map((f) => uploadDailyLogPhoto(supabase, tenantId, projectId, logId, userId, f)),
       )
-      toast.success('Report submitted')
+      const warning = photoUploadWarning(failed, total)
+      if (warning) toast.error(warning)
+      else toast.success('Report submitted')
       onSuccess()
     } catch (e) {
       toast.error((e as Error).message)
@@ -1076,7 +1100,10 @@ function SummaryBuilderModal({
     if (!summaryText.trim()) return
     setIsSubmitting(true)
     try {
-      await createSummaryLog(supabase, tenantId, projectId, userId, {
+      // The summary row is saved as soon as this call returns — a failure to
+      // link the selected photos is reported via photoLinkError rather than
+      // thrown, so it can't hide an already-saved summary from the app.
+      const { photoLinkError } = await createSummaryLog(supabase, tenantId, projectId, userId, {
         date,
         weather: weather || null,
         temperature_f: temperatureF ? Number(temperatureF) : null,
@@ -1089,7 +1116,8 @@ function SummaryBuilderModal({
       } satisfies CreateSummaryLogInput)
 
       qc.invalidateQueries({ queryKey: ['project-field', projectId] })
-      toast.success('Summary created')
+      if (photoLinkError) toast.error(`Summary saved, but photos could not be attached: ${photoLinkError}`)
+      else toast.success('Summary created')
       onSuccess()
     } catch (e) {
       toast.error((e as Error).message)
@@ -1561,13 +1589,20 @@ function DailySummarySection({
         publish: vals.publish,
         log_type: 'summary',
       } satisfies CreateDailyLogInput)
-      if (photos.length > 0) {
-        await Promise.all(
-          photos.map((f) => uploadDailyLogPhoto(supabase, tenantId, projectId, logId, userId, f)),
-        )
-      }
+      // The summary row above is already saved — a photo failure below must
+      // not make it disappear from the app (see uploadPhotosSettled).
+      if (photos.length === 0) return { failed: 0, total: 0 }
+      return uploadPhotosSettled(
+        photos.map((f) => uploadDailyLogPhoto(supabase, tenantId, projectId, logId, userId, f)),
+      )
     },
-    onSuccess: () => { invalidate(); setModal(null); toast.success('Summary created') },
+    onSuccess: ({ failed, total }) => {
+      invalidate()
+      setModal(null)
+      const warning = photoUploadWarning(failed, total)
+      if (warning) toast.error(warning)
+      else toast.success('Summary created')
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 
@@ -1585,14 +1620,20 @@ function DailySummarySection({
         issues_or_delays: vals.issues_or_delays || null,
         is_client_visible: vals.is_client_visible,
       } satisfies UpdateDailyLogInput)
-      if (photos.length > 0) {
-        await Promise.all(
-          photos.map((f) => uploadDailyLogPhoto(supabase, tenantId, projectId, logId, userId, f)),
-        )
-        qc.invalidateQueries({ queryKey: ['log-photos', logId] })
-      }
+      if (photos.length === 0) return { failed: 0, total: 0 }
+      const result = await uploadPhotosSettled(
+        photos.map((f) => uploadDailyLogPhoto(supabase, tenantId, projectId, logId, userId, f)),
+      )
+      qc.invalidateQueries({ queryKey: ['log-photos', logId] })
+      return result
     },
-    onSuccess: () => { invalidate(); setModal(null); toast.success('Summary updated') },
+    onSuccess: ({ failed, total }) => {
+      invalidate()
+      setModal(null)
+      const warning = photoUploadWarning(failed, total)
+      if (warning) toast.error(warning)
+      else toast.success('Summary updated')
+    },
     onError: (e: Error) => toast.error(e.message),
   })
 

@@ -10,7 +10,7 @@
     "./types": "./src/types/index.ts"
   },
   "scripts": {
-    "test": "node --experimental-strip-types ./src/services/projectDocuments.regression.test.ts",
+    "test": "node --experimental-strip-types ./src/services/projectDocuments.regression.test.ts && node --experimental-strip-types ./src/services/dailyLogs.regression.test.ts",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {
