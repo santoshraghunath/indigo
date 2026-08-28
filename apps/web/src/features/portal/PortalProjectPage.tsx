@@ -12,6 +12,7 @@ import {
   upsertPortalSelection,
   getDailyLogPhotos,
   formatMoney,
+  DocumentFileMissingError,
 } from '@indigo/shared'
 import type {
   PortalMilestone,
@@ -1645,8 +1646,10 @@ function DocumentsTab({
     try {
       const download = await getPortalDocumentDownload(supabase, projectId, documentId)
       triggerDownload(download.signedUrl, download.fileName)
-    } catch {
-      setDownloadError(getPortalDocumentDownloadErrorMessage())
+    } catch (err) {
+      setDownloadError(
+        err instanceof DocumentFileMissingError ? err.message : getPortalDocumentDownloadErrorMessage(),
+      )
     } finally {
       setDownloadingId(null)
     }

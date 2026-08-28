@@ -1,4 +1,5 @@
 import type { SupabaseClient } from './supabase.js'
+import { DocumentFileMissingError, isMissingStorageObjectError } from './projectService.ts'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -501,7 +502,10 @@ export async function getPortalDocumentDownload(
       download: typedDocument.name,
     })
 
-  if (signError) throw signError
+  if (signError) {
+    if (isMissingStorageObjectError(signError)) throw new DocumentFileMissingError()
+    throw signError
+  }
 
   return {
     documentId: typedDocument.id,

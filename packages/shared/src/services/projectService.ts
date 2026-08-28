@@ -730,6 +730,25 @@ async function rollbackProjectDocumentUpload(
   }
 }
 
+/**
+ * Thrown when a document's database row references a storage object that
+ * no longer exists (or never existed) in the bucket — e.g. the row was
+ * created without a completed upload, or the underlying file was later
+ * removed from storage independently of its metadata row. Safe to surface
+ * verbatim to any caller, staff or portal.
+ */
+export class DocumentFileMissingError extends Error {
+  constructor() {
+    super('This file could not be found in storage. It may need to be re-uploaded.')
+    this.name = 'DocumentFileMissingError'
+  }
+}
+
+/** True when a Supabase Storage error means the object itself is missing. */
+export function isMissingStorageObjectError(error: { statusCode?: string } | null | undefined): boolean {
+  return error?.statusCode === '404'
+}
+
 export async function getProjectDocumentDownload(
   client: SupabaseClient,
   tenantId: string,
@@ -763,7 +782,10 @@ export async function getProjectDocumentDownload(
       download: typedDocument.name,
     })
 
-  if (signError) throw signError
+  if (signError) {
+    if (isMissingStorageObjectError(signError)) throw new DocumentFileMissingError()
+    throw signError
+  }
 
   return {
     documentId: typedDocument.id,

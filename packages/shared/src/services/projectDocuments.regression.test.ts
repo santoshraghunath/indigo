@@ -1,8 +1,14 @@
 import {
+  DocumentFileMissingError,
   getProjectDocumentDownload,
   uploadProjectDocument,
 } from './projectService.ts'
 import { getPortalDocumentDownload } from './portalService.ts'
+
+/** Mirrors the shape of a real Supabase Storage "object not found" error. */
+function missingObjectError(): Error & { statusCode: string } {
+  return Object.assign(new Error('Object not found'), { statusCode: '404' })
+}
 
 const MEBIBYTE = 1024 * 1024
 
@@ -337,6 +343,19 @@ await run('getProjectDocumentDownload returns an opaque signed download payload 
   ], 'staff download should sign the stored object path')
 })
 
+await run('getProjectDocumentDownload surfaces a clear error when the storage object is missing', async () => {
+  const { client } = createProjectClient({
+    signedUrlError: missingObjectError(),
+  })
+
+  try {
+    await getProjectDocumentDownload(client as never, 'tenant-1', 'project-1', 'doc-1')
+    throw new Error('expected getProjectDocumentDownload to reject')
+  } catch (err) {
+    assert(err instanceof DocumentFileMissingError, 'a 404 from storage should surface as DocumentFileMissingError')
+  }
+})
+
 await run('getPortalDocumentDownload signs only client-visible project documents and returns no storage path', async () => {
   const { client, eqCalls, signedUrlCalls } = createPortalClient({})
 
@@ -367,4 +386,17 @@ await run('getPortalDocumentDownload surfaces unauthorized access failures', asy
   )
 
   assertEqual(signedUrlCalls.length, 0, 'unauthorized portal downloads should not sign')
+})
+
+await run('getPortalDocumentDownload surfaces a clear error when the storage object is missing', async () => {
+  const { client } = createPortalClient({
+    signedUrlError: missingObjectError(),
+  })
+
+  try {
+    await getPortalDocumentDownload(client as never, 'project-1', 'doc-portal-1')
+    throw new Error('expected getPortalDocumentDownload to reject')
+  } catch (err) {
+    assert(err instanceof DocumentFileMissingError, 'a 404 from storage should surface as DocumentFileMissingError')
+  }
 })
