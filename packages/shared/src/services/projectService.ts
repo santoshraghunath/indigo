@@ -1533,6 +1533,30 @@ export async function deletePhase(
   if (error) throw error
 }
 
+/**
+ * Persists a new phase order. `orderedPhaseIds` is the full list of phase
+ * IDs for the project, front-to-back — each phase's `sequence` is set to
+ * its index in the array.
+ */
+export async function reorderPhases(
+  client: SupabaseClient,
+  tenantId: string,
+  projectId: string,
+  orderedPhaseIds: string[],
+): Promise<void> {
+  await Promise.all(
+    orderedPhaseIds.map((id, sequence) =>
+      client
+        .from('project_phases')
+        .update({ sequence } as unknown as never)
+        .eq('id', id)
+        .eq('project_id', projectId)
+        .eq('tenant_id', tenantId)
+        .then(({ error }) => { if (error) throw error }),
+    ),
+  )
+}
+
 // ── Milestone mutations ────────────────────────────────────────────────────
 
 export interface UpsertMilestoneInput {
@@ -1694,6 +1718,30 @@ export async function deleteMilestone(
     .eq('id', milestoneId)
     .eq('tenant_id', tenantId)
   if (error) throw error
+}
+
+/**
+ * Persists a new milestone order within a single phase. `orderedMilestoneIds`
+ * is the full list of that phase's milestone IDs, front-to-back — each
+ * milestone's `sequence` is set to its index in the array.
+ */
+export async function reorderMilestones(
+  client: SupabaseClient,
+  tenantId: string,
+  phaseId: string,
+  orderedMilestoneIds: string[],
+): Promise<void> {
+  await Promise.all(
+    orderedMilestoneIds.map((id, sequence) =>
+      client
+        .from('milestones')
+        .update({ sequence } as unknown as never)
+        .eq('id', id)
+        .eq('phase_id', phaseId)
+        .eq('tenant_id', tenantId)
+        .then(({ error }) => { if (error) throw error }),
+    ),
+  )
 }
 
 /** Patches only the predecessor relationship — used by the CSV import second pass. */

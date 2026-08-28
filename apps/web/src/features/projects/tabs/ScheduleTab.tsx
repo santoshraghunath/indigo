@@ -2,12 +2,31 @@ import { useState, useRef, useEffect } from 'react'
 import { useOutletContext, useParams } from 'react-router-dom'
 import { pdf, Document, Page, View, Text, Svg, Rect, Line, Path } from '@react-pdf/renderer'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  DndContext,
+  closestCenter,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import type { ProjectRow, ProjectPhase, ProjectMilestone, MilestoneCascadeChange } from '@indigo/shared'
 import {
   upsertPhase,
   upsertMilestone,
   deletePhase,
   deleteMilestone,
+  reorderPhases,
+  reorderMilestones,
   setMilestonePredecessor,
   computeMilestoneCascade,
 } from '@indigo/shared'
@@ -31,6 +50,7 @@ import {
   DocumentIcon,
   TableCellsIcon,
   ChevronDownIcon,
+  GripVerticalIcon,
 } from '@/components/ui/Icons'
 
 interface OutletCtx {
@@ -719,8 +739,32 @@ function MilestoneRow({
   const overdue = isOverdue(milestone.due_date, milestone.completed_date)
   const blocked = milestone.status === 'blocked'
 
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id:       milestone.id,
+    disabled: !canEdit,
+  })
+  const dragStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition: transition ?? undefined,
+  }
+
   return (
-    <div className={`group relative flex gap-3 py-3 ${!isLast ? 'border-b border-gray-100' : ''}`}>
+    <div
+      ref={setNodeRef}
+      style={dragStyle}
+      className={`group relative flex gap-1.5 py-3 ${!isLast ? 'border-b border-gray-100' : ''} ${isDragging ? 'z-10 rounded-lg bg-white opacity-50 shadow-lg ring-1 ring-gray-200' : ''}`}
+    >
+      {canEdit && (
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          className="shrink-0 touch-none self-start rounded p-1 text-gray-300 opacity-0 transition-opacity hover:bg-gray-100 hover:text-gray-500 group-hover:opacity-100 cursor-grab active:cursor-grabbing"
+          title="Drag to reorder"
+        >
+          <GripVerticalIcon className="h-3.5 w-3.5" />
+        </button>
+      )}
       <div className="flex flex-col items-center pt-0.5">
         <div className={`h-2.5 w-2.5 shrink-0 rounded-full ring-2 ring-white ${cfg.dot}`} />
         {!isLast && <div className="mt-1 w-px flex-1 bg-gray-200" />}
@@ -836,12 +880,36 @@ function PhaseCard({
   const pct         = total > 0 ? Math.round((completed / total) * 100) : 0
   const sorted      = [...phase.milestones].sort((a, b) => a.sequence - b.sequence)
 
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id:       phase.id,
+    disabled: !canEdit,
+  })
+  const dragStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition: transition ?? undefined,
+  }
+
   return (
-    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-card">
+    <div
+      ref={setNodeRef}
+      style={dragStyle}
+      className={`overflow-hidden rounded-xl border border-gray-200 bg-white shadow-card ${isDragging ? 'z-10 opacity-50 shadow-lg' : ''}`}
+    >
       <div
-        className="flex items-start gap-4 border-l-4 px-5 py-4"
+        className="flex items-start gap-2 border-l-4 px-5 py-4"
         style={{ borderLeftColor: accentColor }}
       >
+        {canEdit && (
+          <button
+            type="button"
+            {...attributes}
+            {...listeners}
+            className="mt-0.5 shrink-0 touch-none rounded p-1 text-gray-300 hover:bg-gray-100 hover:text-gray-500 cursor-grab active:cursor-grabbing"
+            title="Drag to reorder phase"
+          >
+            <GripVerticalIcon className="h-4 w-4" />
+          </button>
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-semibold text-gray-900">{phase.name}</h3>
@@ -900,19 +968,21 @@ function PhaseCard({
       )}
 
       {sorted.length > 0 ? (
-        <div className="px-5 py-1">
-          {sorted.map((m, i) => (
-            <MilestoneRow
-              key={m.id}
-              milestone={m}
-              isLast={i === sorted.length - 1}
-              canEdit={canEdit}
-              hideFinancials={hideFinancials}
-              onEdit={onEditMilestone}
-              onDelete={onDeleteMilestone}
-            />
-          ))}
-        </div>
+        <SortableContext items={sorted.map((m) => m.id)} strategy={verticalListSortingStrategy}>
+          <div className="px-5 py-1">
+            {sorted.map((m, i) => (
+              <MilestoneRow
+                key={m.id}
+                milestone={m}
+                isLast={i === sorted.length - 1}
+                canEdit={canEdit}
+                hideFinancials={hideFinancials}
+                onEdit={onEditMilestone}
+                onDelete={onDeleteMilestone}
+              />
+            ))}
+          </div>
+        </SortableContext>
       ) : (
         <div className="px-5 py-3 text-center text-xs text-gray-400">
           No milestones yet.
@@ -941,7 +1011,125 @@ function PhaseCard({
 const LEFT_COL_W = 180
 const PX_PER_DAY = 14   // pixels per calendar day — adjust for zoom feel
 
-function GanttView({ phases }: { phases: ProjectPhase[] }) {
+type ToPxFn = (dateStr: string | null | undefined, offsetDays?: number) => number
+
+// ── Draggable/resizable phase bar (Gantt view) ──────────────────────────────
+
+function PhaseGanttBar({
+  phase,
+  accentColor,
+  toPx,
+  canEdit,
+  onCommit,
+}: {
+  phase: ProjectPhase
+  accentColor: string
+  toPx: ToPxFn
+  canEdit: boolean
+  onCommit: (phaseId: string, startDate: string, endDate: string) => void
+}) {
+  const [preview, setPreview] = useState<{ start: string; end: string } | null>(null)
+  const dragRef = useRef<{
+    mode: 'move' | 'resize-left' | 'resize-right'
+    startX: number
+    origStart: string
+    origEnd: string
+    latest: { start: string; end: string }
+  } | null>(null)
+
+  function beginDrag(mode: 'move' | 'resize-left' | 'resize-right', e: React.PointerEvent) {
+    if (!canEdit || !phase.start_date || !phase.end_date) return
+    e.preventDefault()
+    e.stopPropagation()
+    const origStart = phase.start_date
+    const origEnd   = phase.end_date
+    dragRef.current = { mode, startX: e.clientX, origStart, origEnd, latest: { start: origStart, end: origEnd } }
+    setPreview({ start: origStart, end: origEnd })
+    document.body.style.userSelect = 'none'
+
+    function handleMove(ev: PointerEvent) {
+      const d = dragRef.current
+      if (!d) return
+      const deltaDays = Math.round((ev.clientX - d.startX) / PX_PER_DAY)
+      let newStart = d.origStart
+      let newEnd   = d.origEnd
+      if (d.mode === 'move') {
+        newStart = addDays(d.origStart, deltaDays)
+        newEnd   = addDays(d.origEnd, deltaDays)
+      } else if (d.mode === 'resize-left') {
+        newStart = addDays(d.origStart, deltaDays)
+        if (newStart > d.origEnd) newStart = d.origEnd
+      } else {
+        newEnd = addDays(d.origEnd, deltaDays)
+        if (newEnd < d.origStart) newEnd = d.origStart
+      }
+      d.latest = { start: newStart, end: newEnd }
+      setPreview(d.latest)
+    }
+
+    function handleUp() {
+      window.removeEventListener('pointermove', handleMove)
+      window.removeEventListener('pointerup', handleUp)
+      document.body.style.userSelect = ''
+      const d = dragRef.current
+      dragRef.current = null
+      setPreview(null)
+      if (d && (d.latest.start !== d.origStart || d.latest.end !== d.origEnd)) {
+        onCommit(phase.id, d.latest.start, d.latest.end)
+      }
+    }
+
+    window.addEventListener('pointermove', handleMove)
+    window.addEventListener('pointerup', handleUp)
+  }
+
+  const displayStart = preview?.start ?? phase.start_date
+  const displayEnd   = preview?.end   ?? phase.end_date
+  const hasBar       = !!(displayStart && displayEnd)
+  if (!hasBar) return null
+
+  const barLeft  = toPx(displayStart)
+  const barRight = toPx(displayEnd, 1)
+  const barWidth = Math.max(barRight - barLeft, 4)
+
+  return (
+    <div
+      className={`absolute top-1/2 h-6 -translate-y-1/2 touch-none rounded-md transition-shadow ${
+        canEdit ? 'cursor-grab active:cursor-grabbing' : ''
+      } ${preview ? 'shadow-lg ring-2 ring-white' : ''}`}
+      style={{ left: barLeft, width: barWidth, backgroundColor: accentColor, opacity: preview ? 1 : 0.85 }}
+      onPointerDown={(e) => beginDrag('move', e)}
+      title={
+        canEdit
+          ? `${fmtDateShort(displayStart)} → ${fmtDateShort(displayEnd)} — drag to move, edges to resize`
+          : `${fmtDateShort(displayStart)} → ${fmtDateShort(displayEnd)}`
+      }
+    >
+      {canEdit && (
+        <>
+          <div
+            className="absolute inset-y-0 left-0 w-2 touch-none cursor-ew-resize rounded-l-md hover:bg-black/10"
+            onPointerDown={(e) => beginDrag('resize-left', e)}
+          />
+          <div
+            className="absolute inset-y-0 right-0 w-2 touch-none cursor-ew-resize rounded-r-md hover:bg-black/10"
+            onPointerDown={(e) => beginDrag('resize-right', e)}
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
+function GanttView({
+  phases,
+  canEdit,
+  onPhaseDatesChange,
+}: {
+  phases: ProjectPhase[]
+  canEdit: boolean
+  onPhaseDatesChange: (phaseId: string, startDate: string, endDate: string) => void
+}) {
   const sorted = [...phases].sort((a, b) => a.sequence - b.sequence)
 
   const allDates: Date[] = []
@@ -1064,10 +1252,6 @@ function GanttView({ phases }: { phases: ProjectPhase[] }) {
               {sorted.map((phase) => {
                 const accentColor = phase.color ?? PHASE_ACCENT[phase.status] ?? '#d1d5db'
                 const cfg         = PHASE_STATUS[phase.status] ?? PHASE_STATUS.not_started
-                const hasBar      = !!(phase.start_date && phase.end_date)
-                const barLeft     = hasBar ? toPx(phase.start_date) : -1
-                const barRight    = hasBar ? toPx(phase.end_date, 1) : -1
-                const barWidth    = hasBar ? Math.max(barRight - barLeft, 4) : 0
                 const milestones  = phase.milestones.filter((m) => m.due_date)
 
                 return (
@@ -1085,13 +1269,14 @@ function GanttView({ phases }: { phases: ProjectPhase[] }) {
                       {showToday && (
                         <div className="absolute inset-y-0 w-px bg-red-300" style={{ left: todayPx }} />
                       )}
-                      {/* Phase duration bar */}
-                      {hasBar && (
-                        <div
-                          className="absolute top-1/2 h-6 -translate-y-1/2 rounded-md"
-                          style={{ left: barLeft, width: barWidth, backgroundColor: accentColor, opacity: 0.85 }}
-                        />
-                      )}
+                      {/* Phase duration bar — draggable to move, edges resizable */}
+                      <PhaseGanttBar
+                        phase={phase}
+                        accentColor={accentColor}
+                        toPx={toPx}
+                        canEdit={canEdit}
+                        onCommit={onPhaseDatesChange}
+                      />
                       {/* Milestone diamonds */}
                       {milestones.map((m) => {
                         const mp      = toPx(m.due_date)
@@ -1929,6 +2114,102 @@ export function ScheduleTab() {
 
   const toast = useToast()
 
+  // Drag-and-drop reordering — sensors + mutations
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
+  const reorderPhasesMut = useMutation({
+    mutationFn: (orderedIds: string[]) => reorderPhases(supabase, tenantId, projectId!, orderedIds),
+    onError: (err) => {
+      toast.error('Failed to reorder phases', err instanceof Error ? err.message : 'Try again.')
+      refresh()
+    },
+  })
+
+  const reorderMilestonesMut = useMutation({
+    mutationFn: ({ phaseId, orderedIds }: { phaseId: string; orderedIds: string[] }) =>
+      reorderMilestones(supabase, tenantId, phaseId, orderedIds),
+    onError: (err) => {
+      toast.error('Failed to reorder milestones', err instanceof Error ? err.message : 'Try again.')
+      refresh()
+    },
+  })
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const activeId = String(active.id)
+    const overId   = String(over.id)
+
+    const phase = sorted.find((p) => p.milestones.some((m) => m.id === activeId))
+
+    if (phase) {
+      // Dragging a milestone — only reorder within its own phase.
+      if (!phase.milestones.some((m) => m.id === overId)) return
+      const msSorted   = [...phase.milestones].sort((a, b) => a.sequence - b.sequence)
+      const oldIndex   = msSorted.findIndex((m) => m.id === activeId)
+      const newIndex   = msSorted.findIndex((m) => m.id === overId)
+      if (oldIndex < 0 || newIndex < 0) return
+      const reordered  = arrayMove(msSorted, oldIndex, newIndex)
+      const idOrder    = reordered.map((m) => m.id)
+
+      queryClient.setQueryData<ProjectPhase[]>(['project-phases', projectId], (old) =>
+        old?.map((p) => p.id !== phase.id
+          ? p
+          : { ...p, milestones: p.milestones.map((m) => ({ ...m, sequence: idOrder.indexOf(m.id) })) }),
+      )
+      reorderMilestonesMut.mutate({ phaseId: phase.id, orderedIds: idOrder })
+    } else {
+      // Dragging a phase. All phases and milestones share one DndContext,
+      // so `over` can land on a milestone nested inside another phase's
+      // card — resolve it back up to that milestone's parent phase.
+      const overPhaseId = sorted.some((p) => p.id === overId)
+        ? overId
+        : sorted.find((p) => p.milestones.some((m) => m.id === overId))?.id
+      if (!overPhaseId || overPhaseId === activeId) return
+      const oldIndex = sorted.findIndex((p) => p.id === activeId)
+      const newIndex = sorted.findIndex((p) => p.id === overPhaseId)
+      if (oldIndex < 0 || newIndex < 0) return
+      const reordered = arrayMove(sorted, oldIndex, newIndex)
+      const idOrder    = reordered.map((p) => p.id)
+
+      queryClient.setQueryData<ProjectPhase[]>(['project-phases', projectId], (old) =>
+        old?.map((p) => ({ ...p, sequence: idOrder.indexOf(p.id) })),
+      )
+      reorderPhasesMut.mutate(idOrder)
+    }
+  }
+
+  // Drag-to-move / drag-to-resize a phase bar directly in the Gantt view
+  const resizePhaseMut = useMutation({
+    mutationFn: ({ phase, startDate, endDate }: { phase: ProjectPhase; startDate: string; endDate: string }) =>
+      upsertPhase(supabase, tenantId, projectId!, {
+        id:          phase.id,
+        name:        phase.name,
+        status:      phase.status,
+        start_date:  startDate,
+        end_date:    endDate,
+        color:       phase.color,
+        description: phase.description,
+        sequence:    phase.sequence,
+      }),
+    onError: (err) => {
+      toast.error('Failed to update phase dates', err instanceof Error ? err.message : 'Try again.')
+      refresh()
+    },
+  })
+
+  function handlePhaseDatesChange(phaseId: string, startDate: string, endDate: string) {
+    const phase = sorted.find((p) => p.id === phaseId)
+    if (!phase) return
+    queryClient.setQueryData<ProjectPhase[]>(['project-phases', projectId], (old) =>
+      old?.map((p) => (p.id === phaseId ? { ...p, start_date: startDate, end_date: endDate } : p)),
+    )
+    resizePhaseMut.mutate({ phase, startDate, endDate })
+  }
+
   // Cascade apply mutation — looks up full milestone data to preserve all existing fields
   const cascadeMut = useMutation({
     mutationFn: async (changes: MilestoneCascadeChange[]) => {
@@ -2018,23 +2299,27 @@ export function ScheduleTab() {
           </div>
 
           {view === 'list' ? (
-            <div className="space-y-4">
-              {sorted.map((phase) => (
-                <PhaseCard
-                  key={phase.id}
-                  phase={phase}
-                  canEdit={canEdit}
-                  hideFinancials={hideFinancials}
-                  onEditPhase={(p) => setModal({ type: 'edit-phase', phase: p })}
-                  onDeletePhase={(p) => setModal({ type: 'delete-phase', phase: p })}
-                  onAddMilestone={(phaseId, nextSeq) => setModal({ type: 'add-milestone', phaseId, nextSeq })}
-                  onEditMilestone={(m) => setModal({ type: 'edit-milestone', milestone: m })}
-                  onDeleteMilestone={(m) => setModal({ type: 'delete-milestone', milestone: m })}
-                />
-              ))}
-            </div>
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+              <SortableContext items={sorted.map((p) => p.id)} strategy={verticalListSortingStrategy}>
+                <div className="space-y-4">
+                  {sorted.map((phase) => (
+                    <PhaseCard
+                      key={phase.id}
+                      phase={phase}
+                      canEdit={canEdit}
+                      hideFinancials={hideFinancials}
+                      onEditPhase={(p) => setModal({ type: 'edit-phase', phase: p })}
+                      onDeletePhase={(p) => setModal({ type: 'delete-phase', phase: p })}
+                      onAddMilestone={(phaseId, nextSeq) => setModal({ type: 'add-milestone', phaseId, nextSeq })}
+                      onEditMilestone={(m) => setModal({ type: 'edit-milestone', milestone: m })}
+                      onDeleteMilestone={(m) => setModal({ type: 'delete-milestone', milestone: m })}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           ) : (
-            <GanttView phases={sorted} />
+            <GanttView phases={sorted} canEdit={canEdit} onPhaseDatesChange={handlePhaseDatesChange} />
           )}
         </>
       )}
