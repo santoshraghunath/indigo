@@ -2013,7 +2013,11 @@ export async function getDailyLogPhotos(
   const valid = rows.filter((r) => r.document !== null)
   if (valid.length === 0) return []
 
-  // Batch-sign all URLs — one storage API call regardless of photo count
+  // Batch-sign all URLs — one storage API call regardless of photo count.
+  // createSignedUrls only fails the *outer* call for request-level problems
+  // (auth, network); a per-file failure (RLS denial, missing object) comes
+  // back as that item's own `error` field with signedUrl left null — those
+  // must be checked individually or they're silently treated as blank URLs.
   const { data: signed, error: signError } = await client.storage
     .from(PHOTO_BUCKET)
     .createSignedUrls(
@@ -2022,22 +2026,31 @@ export async function getDailyLogPhotos(
     )
   if (signError) throw signError
 
-  const urlMap = new Map((signed ?? []).map((s) => [s.path, s.signedUrl ?? '']))
+  const urlMap = new Map<string, string>()
+  for (const s of signed ?? []) {
+    if (s.error || !s.signedUrl || !s.path) {
+      console.error(`Failed to sign daily log photo at "${s.path}": ${s.error ?? 'no signed URL returned'}`)
+      continue
+    }
+    urlMap.set(s.path, s.signedUrl)
+  }
 
-  return valid.map((r) => ({
-    id:               r.id,
-    daily_log_id:     r.daily_log_id,
-    document_id:      r.document_id,
-    caption:          r.caption,
-    sequence:         r.sequence,
-    is_client_visible: r.is_client_visible,
-    created_at:       r.created_at,
-    storage_path:     r.document!.storage_path,
-    storage_bucket:   r.document!.storage_bucket,
-    mime_type:        r.document!.mime_type,
-    file_size_bytes:  r.document!.file_size_bytes,
-    signedUrl:        urlMap.get(r.document!.storage_path) ?? '',
-  }))
+  return valid
+    .filter((r) => urlMap.has(r.document!.storage_path))
+    .map((r) => ({
+      id:               r.id,
+      daily_log_id:     r.daily_log_id,
+      document_id:      r.document_id,
+      caption:          r.caption,
+      sequence:         r.sequence,
+      is_client_visible: r.is_client_visible,
+      created_at:       r.created_at,
+      storage_path:     r.document!.storage_path,
+      storage_bucket:   r.document!.storage_bucket,
+      mime_type:        r.document!.mime_type,
+      file_size_bytes:  r.document!.file_size_bytes,
+      signedUrl:        urlMap.get(r.document!.storage_path)!,
+    }))
 }
 
 /**

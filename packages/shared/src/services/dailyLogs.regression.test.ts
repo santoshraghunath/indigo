@@ -1,4 +1,4 @@
-import { createSummaryLog, upsertWorkerDailyReport } from './projectService.ts'
+import { createSummaryLog, getDailyLogPhotos, upsertWorkerDailyReport } from './projectService.ts'
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
@@ -226,4 +226,89 @@ await run('createSummaryLog returns no photoLinkError on success', async () => {
   })
 
   assertEqual(result.photoLinkError, null, 'photoLinkError should be null when linking succeeds')
+})
+
+/**
+ * Mocks getDailyLogPhotos: a daily_log_photos↔documents join plus a
+ * batch createSignedUrls call. `signResults` lets a test give each path
+ * its own { signedUrl, error } outcome, exactly like the real per-item
+ * response shape from Supabase's batch sign endpoint.
+ */
+function createDailyLogPhotosClient(options: {
+  rows: Array<{ id: string; document_id: string; storage_path: string }>
+  signResults: Record<string, { signedUrl: string | null; error: string | null }>
+}) {
+  const client = {
+    from(table: string) {
+      if (table !== 'daily_log_photos') throw new Error(`Unexpected table ${table}`)
+      return {
+        select() { return this },
+        eq() { return this },
+        order() { return this },
+        then(resolve: (v: unknown) => void) {
+          resolve({
+            data: options.rows.map((r) => ({
+              id: r.id,
+              daily_log_id: 'log-1',
+              document_id: r.document_id,
+              caption: null,
+              sequence: 0,
+              is_client_visible: true,
+              created_at: '2026-01-01T00:00:00.000Z',
+              document: { storage_path: r.storage_path, storage_bucket: 'project-photos', mime_type: 'image/jpeg', file_size_bytes: 100 },
+            })),
+            error: null,
+          })
+        },
+      }
+    },
+    storage: {
+      from() {
+        return {
+          createSignedUrls: async (paths: string[]) => ({
+            data: paths.map((path) => ({
+              path,
+              signedUrl: options.signResults[path]?.signedUrl ?? null,
+              error: options.signResults[path]?.error ?? null,
+            })),
+            error: null,
+          }),
+        }
+      },
+    },
+  }
+
+  return { client }
+}
+
+await run('getDailyLogPhotos drops photos whose batch sign call failed instead of returning a blank URL', async () => {
+  const { client } = createDailyLogPhotosClient({
+    rows: [
+      { id: 'photo-1', document_id: 'doc-1', storage_path: 'tenant-1/daily-logs/log-1/a.jpg' },
+      { id: 'photo-2', document_id: 'doc-2', storage_path: 'tenant-1/daily-logs/log-1/b.jpg' },
+    ],
+    signResults: {
+      'tenant-1/daily-logs/log-1/a.jpg': { signedUrl: 'https://signed.example/a.jpg', error: null },
+      'tenant-1/daily-logs/log-1/b.jpg': { signedUrl: null, error: 'Object not found' },
+    },
+  })
+
+  const photos = await getDailyLogPhotos(client as never, 'log-1')
+
+  assertEqual(photos.length, 1, 'a photo whose sign call failed should be dropped, not returned with a blank URL')
+  assertEqual(photos[0].id, 'photo-1', 'the successfully signed photo should still be returned')
+  assertEqual(photos[0].signedUrl, 'https://signed.example/a.jpg', 'the returned photo should carry its real signed URL')
+})
+
+await run('getDailyLogPhotos returns all photos when every sign call succeeds', async () => {
+  const { client } = createDailyLogPhotosClient({
+    rows: [{ id: 'photo-1', document_id: 'doc-1', storage_path: 'tenant-1/daily-logs/log-1/a.jpg' }],
+    signResults: {
+      'tenant-1/daily-logs/log-1/a.jpg': { signedUrl: 'https://signed.example/a.jpg', error: null },
+    },
+  })
+
+  const photos = await getDailyLogPhotos(client as never, 'log-1')
+
+  assertEqual(photos.length, 1, 'all photos should be returned when signing succeeds')
 })
