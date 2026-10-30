@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { formatMoney } from '@indigo/shared'
+import { formatMoney, isProjectArchived } from '@indigo/shared'
 import { useProjects } from './useProjects'
 import { CreateProjectModal } from './CreateProjectModal'
 import { StatusBadge, TypeBadge } from '@/components/ui/Badge'
@@ -40,10 +40,20 @@ function formatDate(dateStr: string | null | undefined): string | null {
 }
 
 export function ProjectsPage() {
-  const { data: projects, isLoading, error } = useProjects()
+  const { data: allProjects, isLoading, error } = useProjects()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [search, setSearch]           = useState('')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [showArchived, setShowArchived] = useState(false)
+
+  const archivedCount = useMemo(
+    () => allProjects?.filter(isProjectArchived).length ?? 0,
+    [allProjects],
+  )
+  const projects = useMemo(
+    () => (showArchived ? allProjects : allProjects?.filter((p) => !isProjectArchived(p))),
+    [allProjects, showArchived],
+  )
 
   const filtered = useMemo(() => {
     if (!projects) return []
@@ -135,6 +145,18 @@ export function ProjectsPage() {
               </button>
             ))}
           </div>
+
+          {archivedCount > 0 && (
+            <label className="flex min-h-[44px] shrink-0 cursor-pointer select-none items-center gap-2 text-xs font-medium text-gray-600 sm:ml-auto">
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(e) => setShowArchived(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+              />
+              Show archived ({archivedCount})
+            </label>
+          )}
         </div>
       </div>
 
@@ -157,32 +179,33 @@ export function ProjectsPage() {
           <ErrorState />
         ) : filtered.length === 0 ? (
           <EmptyState
-            hasProjects={!!projects?.length}
+            hasProjects={!!allProjects?.length}
             searchActive={!!search || statusFilter !== 'all'}
             onNewProject={() => setShowCreateModal(true)}
           />
         ) : (
           <div className="mx-auto max-w-4xl px-5 pt-4 lg:px-8">
             <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-card">
-              {filtered.map((project, idx) => {
+              {filtered.map((project) => {
                 const job = project.job!
                 const accentColor = STATUS_ACCENT[job.project_status ?? ''] ?? '#9ca3af'
                 const contractCents = job.current_contract_cents ?? job.contract_value_cents
                 const location = [job.city, job.state].filter(Boolean).join(', ')
                 const targetDate = formatDate(job.target_completion)
+                const archived = isProjectArchived(project)
 
                 return (
                   <Link
                     key={project.id}
                     to={`/projects/${project.id}`}
                     className={`group flex items-center gap-4 border-b border-gray-100 px-5 py-4 transition-colors hover:bg-gray-50 last:border-0 ${
-                      idx === 0 ? '' : ''
+                      archived ? 'opacity-60' : ''
                     }`}
                   >
                     {/* Status accent dot */}
                     <div
                       className="h-8 w-1 shrink-0 rounded-full"
-                      style={{ backgroundColor: accentColor }}
+                      style={{ backgroundColor: archived ? '#d1d5db' : accentColor }}
                     />
 
                     {/* Main content */}
@@ -192,6 +215,11 @@ export function ProjectsPage() {
                           {job.job_name}
                         </span>
                         {job.project_type && <TypeBadge type={job.project_type} />}
+                        {archived && (
+                          <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                            Archived
+                          </span>
+                        )}
                       </div>
                       <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
                         <span className="font-mono text-gray-400">{job.job_number}</span>
@@ -273,7 +301,7 @@ function EmptyState({
         </h3>
         <p className="mt-1.5 text-sm text-gray-500 leading-relaxed">
           {hasProjects
-            ? 'Try changing your filters.'
+            ? 'Try changing your filters, or turn on “Show archived”.'
             : 'Projects you create will appear here. Each project tracks financials, schedule, documents, and field activity in one place.'}
         </p>
         {!hasProjects && (

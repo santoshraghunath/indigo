@@ -38,6 +38,8 @@ export interface ProjectJob {
   notes: string
   internal_notes: string | null
   tags: string[]
+  /** BB-owned (BuildersBooks migration 019). Set = hidden from active lists; nothing is deleted. */
+  archived_at?: string | null
 }
 
 export interface ProjectRow {
@@ -116,7 +118,8 @@ export async function getProjects(client: SupabaseClient, tenantId: string) {
         pm_user_id,
         superintendent_user_id,
         package_name,
-        tags
+        tags,
+        archived_at
       )
     `)
     .eq('tenant_id', tenantId)
@@ -124,6 +127,10 @@ export async function getProjects(client: SupabaseClient, tenantId: string) {
 
   if (error) throw error
   return (data ?? []) as ProjectRow[]
+}
+
+export function isProjectArchived(project: Pick<ProjectRow, 'job'>): boolean {
+  return !!project.job?.archived_at
 }
 
 // ── Single project (full detail) ───────────────────────────────────────────

@@ -5,6 +5,7 @@ import {
   getSubCompanies,
   getSubContacts,
   getProjects,
+  isProjectArchived,
   upsertSubCompany,
   deleteSubCompany,
   upsertSubContact,
@@ -61,11 +62,12 @@ function SubInviteModal({
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
   const [sending, setSending] = useState(false)
 
-  const { data: projects = [], isLoading: projectsLoading } = useQuery({
+  const { data: allProjects = [], isLoading: projectsLoading } = useQuery({
     queryKey:  ['projects', tenantId],
     queryFn:   () => getProjects(supabase, tenantId),
     staleTime: 60_000,
   })
+  const projects = allProjects.filter((p) => !isProjectArchived(p))
 
   function toggleProject(id: string) {
     setSelectedProjectIds((prev) =>

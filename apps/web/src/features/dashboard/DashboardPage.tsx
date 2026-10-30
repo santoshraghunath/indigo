@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { formatMoney } from '@indigo/shared'
+import { formatMoney, isProjectArchived } from '@indigo/shared'
 import { useAuth } from '@/hooks/useAuth'
 import { useDashboardStats } from './useDashboardStats'
 import { useProjects } from '@/features/projects/useProjects'
@@ -49,7 +49,7 @@ export function DashboardPage() {
   const { profile } = useAuth()
   const { stats, isLoading } = useDashboardStats()
   const { data: projects, isLoading: projectsLoading } = useProjects()
-  const recentProjects = projects?.filter(p => p.job != null).slice(0, 3) ?? []
+  const recentProjects = projects?.filter(p => p.job != null && !isProjectArchived(p)).slice(0, 3) ?? []
 
   const today = new Date().toLocaleDateString('en-US', {
     weekday: 'long',

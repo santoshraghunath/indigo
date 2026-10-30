@@ -24,6 +24,7 @@ import {
   uploadDailyLogPhoto,
   pmEditWorkSession,
   getProjects,
+  isProjectArchived,
 } from '@indigo/shared'
 import type { EditSessionInput } from '@indigo/shared'
 import { useAuth } from '@/hooks/useAuth'
@@ -1487,7 +1488,7 @@ function PmSessionRow({ session, tenantId, onSaved }: { session: WorkSession; te
               onChange={(e) => setProjectId(e.target.value)}
               className="w-full rounded-lg border border-gray-300 px-2.5 py-1.5 text-xs focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200 bg-white"
             >
-              {projects.map((p) => {
+              {projects.filter((p) => p.id === projectId || !isProjectArchived(p)).map((p) => {
                 const job = p.job as { job_number?: string | null; job_name?: string | null } | null
                 const label = job?.job_number ? `${job.job_number} — ${job.job_name}` : (job?.job_name ?? p.id)
                 return <option key={p.id} value={p.id}>{label}</option>
