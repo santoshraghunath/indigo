@@ -325,6 +325,77 @@ export default defineConfig(({ mode }) => {
         },
       },
 
+      // ── Dev proxy for transcribe-audio Netlify function ─────────────────
+      // Calls OpenAI Whisper directly so `pnpm dev` works without netlify dev.
+      // Auth is skipped in dev — the real function checks it.
+      {
+        name: 'netlify-transcribe-audio-dev',
+        configureServer(server) {
+          server.middlewares.use(
+            '/.netlify/functions/transcribe-audio',
+            async (req, res) => {
+              if (req.method !== 'POST') {
+                res.writeHead(405)
+                res.end('Method Not Allowed')
+                return
+              }
+
+              const openaiApiKey = env.OPENAI_API_KEY
+              if (!openaiApiKey) {
+                res.writeHead(503, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: 'OPENAI_API_KEY not set in .env.local' }))
+                return
+              }
+
+              let raw = ''
+              for await (const chunk of req) raw += chunk
+
+              let body: Record<string, unknown>
+              try { body = JSON.parse(raw) }
+              catch { res.writeHead(400); res.end('Bad Request'); return }
+
+              const audio    = typeof body.audio    === 'string' ? body.audio    : ''
+              const filename = typeof body.filename === 'string' ? body.filename : 'recording.webm'
+              const mimeType = typeof body.mimeType === 'string' ? body.mimeType : 'audio/webm'
+
+              if (!audio) {
+                res.writeHead(400, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: 'audio is required' }))
+                return
+              }
+
+              try {
+                const buffer = Buffer.from(audio, 'base64')
+                const form   = new FormData()
+                form.append('file', new Blob([buffer], { type: mimeType }), filename)
+                form.append('model', 'whisper-1')
+                form.append('language', 'en')
+
+                const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                  method:  'POST',
+                  headers: { Authorization: `Bearer ${openaiApiKey}` },
+                  body:    form,
+                })
+
+                if (!r.ok) {
+                  const err = await r.text()
+                  res.writeHead(500, { 'Content-Type': 'application/json' })
+                  res.end(JSON.stringify({ error: `Transcription failed: ${err}` }))
+                  return
+                }
+
+                const data = await r.json() as { text?: string }
+                res.writeHead(200, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ transcript: data.text?.trim() ?? '' }))
+              } catch (err) {
+                res.writeHead(502, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: String(err) }))
+              }
+            },
+          )
+        },
+      },
+
     ],    // end plugins
 
     resolve: {
