@@ -34,7 +34,9 @@ import type { Handler } from '@netlify/functions'
 const SUPABASE_URL         = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const ANTHROPIC_API_KEY    = process.env.ANTHROPIC_API_KEY!
+const OPENAI_API_KEY       = process.env.OPENAI_API_KEY!
 const ANTHROPIC_MODEL      = 'claude-sonnet-4-6'
+const EMBED_MODEL          = 'text-embedding-3-small'
 
 const PROPOSAL_DRAFTER_SYSTEM = `You are a senior estimator and sales writer for Good Guy Builders, a Bay Area home renovation company.
 
@@ -109,10 +111,64 @@ function json(statusCode: number, body: unknown) {
   }
 }
 
-function buildUserMessage(transcript: string, jobType?: string, address?: string): string {
+interface HistoricalItem {
+  item_name:        string
+  description:      string
+  unit_price_cents: number
+  quantity:         number
+  similarity:       number
+}
+
+async function embedText(text: string): Promise<number[]> {
+  const res = await fetch('https://api.openai.com/v1/embeddings', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+    body:    JSON.stringify({ model: EMBED_MODEL, input: text }),
+  })
+  if (!res.ok) throw new Error(`Embedding failed: ${res.status}`)
+  const body = await res.json() as { data: Array<{ embedding: number[] }> }
+  return body.data[0].embedding
+}
+
+async function fetchSimilarLineItems(
+  tenantId:  string,
+  embedding: number[],
+  limit = 10,
+): Promise<HistoricalItem[]> {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/search_proposal_line_embeddings`, {
+    method:  'POST',
+    headers: { ...svcHeaders(), Accept: 'application/json' },
+    body:    JSON.stringify({
+      p_tenant_id: tenantId,
+      p_embedding: embedding,
+      p_limit:     limit,
+    }),
+  })
+  if (!res.ok) return []
+  const rows = await res.json() as HistoricalItem[]
+  return Array.isArray(rows) ? rows : []
+}
+
+function buildUserMessage(
+  transcript:      string,
+  jobType?:        string,
+  address?:        string,
+  historicalItems?: HistoricalItem[],
+): string {
   const parts: string[] = []
   if (jobType) parts.push(`Job type: ${jobType}`)
   if (address) parts.push(`Address: ${address}`)
+
+  if (historicalItems && historicalItems.length > 0) {
+    parts.push('\nPricing reference — accepted proposals from similar past jobs (use these prices as your primary reference, weighted by similarity score):')
+    historicalItems.forEach((item) => {
+      const price = `$${(item.unit_price_cents / 100).toLocaleString()}`
+      const qty   = item.quantity !== 1 ? ` × ${item.quantity}` : ''
+      const sim   = `(similarity: ${(item.similarity * 100).toFixed(0)}%)`
+      parts.push(`  • ${item.item_name}: ${item.description} — ${price}${qty} ${sim}`)
+    })
+  }
+
   parts.push(`\nTranscript:\n${transcript}`)
   return parts.join('\n')
 }
@@ -175,6 +231,18 @@ export const handler: Handler = async (event) => {
   const members = await memberRes.json() as { role: string }[]
   if (!members[0]) return json(403, { error: 'You are not a member of this tenant' })
 
+  // ── RAG: embed transcript excerpt, find similar historical line items ──────
+  // Best-effort — if embeddings don't exist yet we fall back to static pricing.
+  let historicalItems: HistoricalItem[] = []
+  try {
+    // Use first 2000 chars — enough scope signal without overloading the embedding
+    const queryText = transcript.substring(0, 2000)
+    const embedding = await embedText(queryText)
+    historicalItems = await fetchSimilarLineItems(tenantId, embedding, 12)
+  } catch {
+    // Non-fatal — draft still works with static Bay Area guidelines
+  }
+
   // ── Call Anthropic ────────────────────────────────────────────────────────
   const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -187,7 +255,10 @@ export const handler: Handler = async (event) => {
       model:      ANTHROPIC_MODEL,
       max_tokens: 4096,
       system:     PROPOSAL_DRAFTER_SYSTEM,
-      messages:   [{ role: 'user', content: buildUserMessage(transcript, jobType, address) }],
+      messages:   [{
+        role:    'user',
+        content: buildUserMessage(transcript, jobType, address, historicalItems.length ? historicalItems : undefined),
+      }],
     }),
   })
 

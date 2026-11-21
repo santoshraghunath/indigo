@@ -436,6 +436,7 @@ export function ProposalEditorPage() {
   const [showDeleteConfirm,  setShowDeleteConfirm]  = useState(false)
   const [showAIPanel,        setShowAIPanel]        = useState(false)
   const [wasAiDrafted,       setWasAiDrafted]       = useState(false)
+  const [isIndexing,         setIsIndexing]         = useState(false)
   const [isDirty, setIsDirty]                 = useState(false)
   const [isSaving, setIsSaving]               = useState(false)
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
@@ -550,6 +551,27 @@ export function ProposalEditorPage() {
     markDirty()
   }
 
+  // ── Index signed proposal for RAG pricing ──────────────────────────────────
+
+  async function handleIndexProposal() {
+    if (!activeTenantId) return
+    setIsIndexing(true)
+    try {
+      const r = await fetch('/.netlify/functions/embed-proposal-lines', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+        body:    JSON.stringify({ tenantId: activeTenantId, proposalId }),
+      })
+      const data = await r.json() as { indexed?: number; error?: string }
+      if (!r.ok) throw new Error(data.error ?? 'Unknown error')
+      toast.success(`Indexed ${data.indexed ?? 0} line items for AI pricing`)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Indexing failed')
+    } finally {
+      setIsIndexing(false)
+    }
+  }
+
   // ── Portal link ─────────────────────────────────────────────────────────────
 
   const portalUrl = proposal?.portal_token
@@ -657,6 +679,16 @@ export function ProposalEditorPage() {
             <SparklesIcon className="h-3.5 w-3.5" />
             {showAIPanel ? 'Hide AI Panel' : 'Draft with AI'}
           </button>
+          {proposal.status === 'signed' && (
+            <button
+              onClick={handleIndexProposal}
+              disabled={isIndexing}
+              title="Add line items to the AI pricing index so future drafts use real prices from this job"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+            >
+              {isIndexing ? 'Indexing…' : 'Add to Pricing Index'}
+            </button>
+          )}
           {isDirty && (
             <span className="text-xs text-amber-600 font-medium">Unsaved changes</span>
           )}

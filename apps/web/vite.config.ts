@@ -529,6 +529,108 @@ Rules: Break into trade groups, use lump-sum pricing, include Permit & Fees and 
         },
       },
 
+      // ── Dev proxy for embed-proposal-lines Netlify function ─────────────
+      // Indexes a signed proposal's line items into the vector table.
+      // Auth is skipped in dev — the real function checks PM+ role.
+      {
+        name: 'netlify-embed-proposal-lines-dev',
+        configureServer(server) {
+          server.middlewares.use(
+            '/.netlify/functions/embed-proposal-lines',
+            async (req, res) => {
+              if (req.method !== 'POST') {
+                res.writeHead(405)
+                res.end('Method Not Allowed')
+                return
+              }
+
+              const supabaseUrl  = env.SUPABASE_URL
+              const serviceKey   = env.SUPABASE_SERVICE_ROLE_KEY
+              const openaiApiKey = env.OPENAI_API_KEY
+
+              if (!supabaseUrl || !serviceKey || !openaiApiKey) {
+                res.writeHead(503, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: 'SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, or OPENAI_API_KEY not set in .env.local' }))
+                return
+              }
+
+              let raw = ''
+              for await (const chunk of req) raw += chunk
+
+              let body: Record<string, unknown>
+              try { body = JSON.parse(raw) }
+              catch { res.writeHead(400); res.end('Bad Request'); return }
+
+              const tenantId   = typeof body.tenantId   === 'string' ? body.tenantId.trim()   : ''
+              const proposalId = typeof body.proposalId === 'string' ? body.proposalId.trim() : ''
+
+              if (!tenantId || !proposalId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: 'tenantId and proposalId are required' }))
+                return
+              }
+
+              const svcHeaders = {
+                'Content-Type':  'application/json',
+                'Authorization': `Bearer ${serviceKey}`,
+                'apikey':        serviceKey,
+              }
+
+              try {
+                // Verify proposal is signed
+                const propRes = await fetch(
+                  `${supabaseUrl}/rest/v1/proposals?select=id,status&id=eq.${proposalId}&tenant_id=eq.${tenantId}&limit=1`,
+                  { headers: { ...svcHeaders, Accept: 'application/json' } },
+                )
+                const proposals = await propRes.json() as { id: string; status: string }[]
+                if (!proposals[0]) { res.writeHead(404, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Proposal not found' })); return }
+                if (proposals[0].status !== 'signed') { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Only signed proposals can be indexed' })); return }
+
+                // Fetch line items
+                const itemsRes = await fetch(
+                  `${supabaseUrl}/rest/v1/proposal_line_items?select=id,item_name,description,unit_price_cents,quantity&proposal_id=eq.${proposalId}&order=sort_order`,
+                  { headers: { ...svcHeaders, Accept: 'application/json' } },
+                )
+                const items = await itemsRes.json() as Array<{ id: string; item_name: string; description: string; unit_price_cents: number; quantity: number }>
+                if (!items.length) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ indexed: 0 })); return }
+
+                // Embed
+                const chunkTexts = items.map((it) => it.description ? `${it.item_name}: ${it.description}` : it.item_name)
+                const embedRes = await fetch('https://api.openai.com/v1/embeddings', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${openaiApiKey}` },
+                  body: JSON.stringify({ model: 'text-embedding-3-small', input: chunkTexts }),
+                })
+                if (!embedRes.ok) { const err = await embedRes.text(); res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: `OpenAI error: ${err}` })); return }
+                const embedBody = await embedRes.json() as { data: Array<{ embedding: number[] }> }
+                const embeddings = embedBody.data.map((d) => d.embedding)
+
+                // Delete existing
+                await fetch(`${supabaseUrl}/rest/v1/proposal_line_embeddings?proposal_id=eq.${proposalId}`, { method: 'DELETE', headers: svcHeaders })
+
+                // Insert
+                const rows = items.map((item, i) => ({
+                  tenant_id: tenantId, proposal_id: proposalId, line_item_id: item.id,
+                  item_name: item.item_name, description: item.description,
+                  unit_price_cents: item.unit_price_cents, quantity: item.quantity,
+                  chunk_text: chunkTexts[i], embedding: embeddings[i], model: 'text-embedding-3-small',
+                }))
+                const insertRes = await fetch(`${supabaseUrl}/rest/v1/proposal_line_embeddings`, {
+                  method: 'POST', headers: { ...svcHeaders, Prefer: 'return=minimal' }, body: JSON.stringify(rows),
+                })
+                if (!insertRes.ok) { const err = await insertRes.text(); res.writeHead(500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: `Insert failed: ${err}` })); return }
+
+                res.writeHead(200, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ indexed: rows.length }))
+              } catch (err) {
+                res.writeHead(502, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: String(err) }))
+              }
+            },
+          )
+        },
+      },
+
     ],    // end plugins
 
     resolve: {
