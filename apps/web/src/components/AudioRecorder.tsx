@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 
-// Whisper max is 25 MB; Netlify body limit is 6 MB compressed.
-// 4.5 MB raw encodes to ~6 MB base64 — right at the limit.
-const MAX_BYTES = 4.5 * 1024 * 1024
+// Whisper's hard limit is 25 MB. Enforced server-side by OpenAI.
+const MAX_BYTES = 25 * 1024 * 1024
 
 type Phase = 'idle' | 'requesting' | 'recording' | 'stopped' | 'file_ready'
 
@@ -123,9 +122,7 @@ export function AudioRecorder({ onAudioReady, disabled, className = '' }: Props)
     if (!file) return
 
     if (file.size > MAX_BYTES) {
-      setError(
-        `File is ${(file.size / 1024 / 1024).toFixed(1)} MB — maximum is 4.5 MB. Try a shorter recording.`,
-      )
+      setError(`File is ${(file.size / 1024 / 1024).toFixed(1)} MB — maximum is 25 MB (OpenAI Whisper limit).`)
       return
     }
 
@@ -141,9 +138,7 @@ export function AudioRecorder({ onAudioReady, disabled, className = '' }: Props)
     if (!audioBlob) return
 
     if (audioBlob.size > MAX_BYTES) {
-      setError(
-        `Recording is ${(audioBlob.size / 1024 / 1024).toFixed(1)} MB — maximum is 4.5 MB. Keep visits under about 7 minutes.`,
-      )
+      setError(`Recording is ${(audioBlob.size / 1024 / 1024).toFixed(1)} MB — maximum is 25 MB (OpenAI Whisper limit).`)
       return
     }
 

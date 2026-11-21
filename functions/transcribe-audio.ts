@@ -2,20 +2,21 @@
  * POST /.netlify/functions/transcribe-audio
  *
  * Transcribes a sales visit audio recording using OpenAI Whisper.
- * Accepts a base64-encoded audio file in the JSON body. PM+ only.
+ * The client uploads the audio file directly to the `sales-audio`
+ * Supabase storage bucket first (via uploadAudioForTranscription in
+ * packages/shared), then passes the storage path here. This avoids
+ * Netlify's 6 MB body limit — only a small JSON payload is sent.
  *
  * Body (JSON):
- *   tenantId  string  — tenants.id (for auth check)
- *   audio     string  — base64-encoded audio bytes
- *   filename  string  — original filename including extension (e.g. "recording.m4a")
- *   mimeType  string  — MIME type (e.g. "audio/mp4")
+ *   tenantId     string  — tenants.id (for auth check)
+ *   storagePath  string  — path inside the sales-audio bucket
+ *                          (e.g. "{tenantId}/{uuid}.webm")
  *
  * Responses:
  *   200  { transcript: string }
  *   400  { error: string }
  *   401  { error: string }
  *   403  { error: string }
- *   413  { error: string }
  *   500  { error: string }
  */
 
@@ -25,11 +26,7 @@ const SUPABASE_URL         = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const OPENAI_API_KEY       = process.env.OPENAI_API_KEY!
 
-// Anyone who can create a proposal
 const PM_AND_ABOVE = new Set(['project_manager', 'admin', 'owner'])
-
-// 4.5 MB raw audio → ~6 MB base64-encoded body (Netlify limit)
-const MAX_AUDIO_BYTES = 4.5 * 1024 * 1024
 
 function svcHeaders(): Record<string, string> {
   return {
@@ -45,6 +42,13 @@ function json(statusCode: number, body: unknown) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   }
+}
+
+async function deleteStorageFile(storagePath: string): Promise<void> {
+  await fetch(
+    `${SUPABASE_URL}/storage/v1/object/sales-audio/${storagePath}`,
+    { method: 'DELETE', headers: svcHeaders() },
+  ).catch(() => { /* best-effort cleanup */ })
 }
 
 export const handler: Handler = async (event) => {
@@ -67,13 +71,16 @@ export const handler: Handler = async (event) => {
   try { body = JSON.parse(event.body ?? '{}') }
   catch { return json(400, { error: 'Invalid JSON body' }) }
 
-  const tenantId = typeof body.tenantId === 'string' ? body.tenantId.trim() : ''
-  const audio    = typeof body.audio    === 'string' ? body.audio            : ''
-  const filename = typeof body.filename === 'string' ? body.filename.trim()  : 'recording.webm'
-  const mimeType = typeof body.mimeType === 'string' ? body.mimeType.trim()  : 'audio/webm'
+  const tenantId    = typeof body.tenantId    === 'string' ? body.tenantId.trim()    : ''
+  const storagePath = typeof body.storagePath === 'string' ? body.storagePath.trim() : ''
 
-  if (!tenantId) return json(400, { error: 'tenantId is required' })
-  if (!audio)    return json(400, { error: 'audio is required' })
+  if (!tenantId)    return json(400, { error: 'tenantId is required' })
+  if (!storagePath) return json(400, { error: 'storagePath is required' })
+
+  // Ensure the path is inside the caller's tenant folder
+  if (!storagePath.startsWith(`${tenantId}/`)) {
+    return json(403, { error: 'storagePath must be within your tenant folder' })
+  }
 
   // ── Role check ────────────────────────────────────────────────────────────
   const memberRes = await fetch(
@@ -85,19 +92,19 @@ export const handler: Handler = async (event) => {
     return json(403, { error: 'Project Manager, Admin, or Owner required' })
   }
 
-  // ── Decode and size-check ─────────────────────────────────────────────────
-  let audioBuffer: Buffer
-  try {
-    audioBuffer = Buffer.from(audio, 'base64')
-  } catch {
-    return json(400, { error: 'Invalid base64 audio data' })
+  // ── Fetch audio from Supabase storage ────────────────────────────────────
+  const storageRes = await fetch(
+    `${SUPABASE_URL}/storage/v1/object/sales-audio/${storagePath}`,
+    { headers: { Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, apikey: SUPABASE_SERVICE_KEY } },
+  )
+
+  if (!storageRes.ok) {
+    return json(500, { error: `Could not retrieve audio file: ${storageRes.status}` })
   }
 
-  if (audioBuffer.length > MAX_AUDIO_BYTES) {
-    return json(413, {
-      error: `Audio too large (${(audioBuffer.length / 1024 / 1024).toFixed(1)} MB). Maximum is 4.5 MB — keep recordings under about 7 minutes.`,
-    })
-  }
+  const audioBuffer = Buffer.from(await storageRes.arrayBuffer())
+  const mimeType    = storageRes.headers.get('content-type') ?? 'audio/webm'
+  const filename    = storagePath.split('/').pop() ?? 'recording.webm'
 
   // ── Transcribe with OpenAI Whisper ────────────────────────────────────────
   const form = new FormData()
@@ -110,6 +117,9 @@ export const handler: Handler = async (event) => {
     headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
     body:    form,
   })
+
+  // Always delete the temp file, even on transcription failure
+  await deleteStorageFile(storagePath)
 
   if (!whisperRes.ok) {
     const err = await whisperRes.text()

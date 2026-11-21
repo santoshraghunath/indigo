@@ -326,7 +326,7 @@ export default defineConfig(({ mode }) => {
       },
 
       // ── Dev proxy for transcribe-audio Netlify function ─────────────────
-      // Calls OpenAI Whisper directly so `pnpm dev` works without netlify dev.
+      // Downloads audio from Supabase storage, calls OpenAI Whisper directly.
       // Auth is skipped in dev — the real function checks it.
       {
         name: 'netlify-transcribe-audio-dev',
@@ -340,10 +340,13 @@ export default defineConfig(({ mode }) => {
                 return
               }
 
+              const supabaseUrl  = env.SUPABASE_URL
+              const serviceKey   = env.SUPABASE_SERVICE_ROLE_KEY
               const openaiApiKey = env.OPENAI_API_KEY
-              if (!openaiApiKey) {
+
+              if (!supabaseUrl || !serviceKey || !openaiApiKey) {
                 res.writeHead(503, { 'Content-Type': 'application/json' })
-                res.end(JSON.stringify({ error: 'OPENAI_API_KEY not set in .env.local' }))
+                res.end(JSON.stringify({ error: 'SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, or OPENAI_API_KEY not set in .env.local' }))
                 return
               }
 
@@ -354,20 +357,40 @@ export default defineConfig(({ mode }) => {
               try { body = JSON.parse(raw) }
               catch { res.writeHead(400); res.end('Bad Request'); return }
 
-              const audio    = typeof body.audio    === 'string' ? body.audio    : ''
-              const filename = typeof body.filename === 'string' ? body.filename : 'recording.webm'
-              const mimeType = typeof body.mimeType === 'string' ? body.mimeType : 'audio/webm'
+              const storagePath = typeof body.storagePath === 'string' ? body.storagePath : ''
 
-              if (!audio) {
+              if (!storagePath) {
                 res.writeHead(400, { 'Content-Type': 'application/json' })
-                res.end(JSON.stringify({ error: 'audio is required' }))
+                res.end(JSON.stringify({ error: 'storagePath is required' }))
                 return
               }
 
               try {
-                const buffer = Buffer.from(audio, 'base64')
-                const form   = new FormData()
-                form.append('file', new Blob([buffer], { type: mimeType }), filename)
+                // Fetch audio from Supabase storage
+                const storageRes = await fetch(
+                  `${supabaseUrl}/storage/v1/object/sales-audio/${storagePath}`,
+                  { headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey } },
+                )
+
+                if (!storageRes.ok) {
+                  res.writeHead(500, { 'Content-Type': 'application/json' })
+                  res.end(JSON.stringify({ error: `Storage fetch failed: ${storageRes.status}` }))
+                  return
+                }
+
+                const audioBuffer = Buffer.from(await storageRes.arrayBuffer())
+                const mimeType    = storageRes.headers.get('content-type') ?? 'audio/webm'
+                const filename    = storagePath.split('/').pop() ?? 'recording.webm'
+
+                // Delete temp file (best-effort)
+                fetch(`${supabaseUrl}/storage/v1/object/sales-audio/${storagePath}`, {
+                  method: 'DELETE',
+                  headers: { Authorization: `Bearer ${serviceKey}`, apikey: serviceKey },
+                }).catch(() => {})
+
+                // Transcribe
+                const form = new FormData()
+                form.append('file', new Blob([audioBuffer], { type: mimeType }), filename)
                 form.append('model', 'whisper-1')
                 form.append('language', 'en')
 
@@ -387,6 +410,116 @@ export default defineConfig(({ mode }) => {
                 const data = await r.json() as { text?: string }
                 res.writeHead(200, { 'Content-Type': 'application/json' })
                 res.end(JSON.stringify({ transcript: data.text?.trim() ?? '' }))
+              } catch (err) {
+                res.writeHead(502, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: String(err) }))
+              }
+            },
+          )
+        },
+      },
+
+      // ── Dev proxy for draft-proposal Netlify function ────────────────────
+      // Calls Anthropic directly so `pnpm dev` works without netlify dev.
+      // Auth is skipped in dev — the real function checks it.
+      {
+        name: 'netlify-draft-proposal-dev',
+        configureServer(server) {
+          server.middlewares.use(
+            '/.netlify/functions/draft-proposal',
+            async (req, res) => {
+              if (req.method !== 'POST') {
+                res.writeHead(405)
+                res.end('Method Not Allowed')
+                return
+              }
+
+              const anthropicApiKey = env.ANTHROPIC_API_KEY
+              if (!anthropicApiKey) {
+                res.writeHead(503, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: 'ANTHROPIC_API_KEY not set in .env.local' }))
+                return
+              }
+
+              let raw = ''
+              for await (const chunk of req) raw += chunk
+
+              let body: Record<string, unknown>
+              try { body = JSON.parse(raw) }
+              catch { res.writeHead(400); res.end('Bad Request'); return }
+
+              const transcript = typeof body.transcript === 'string' ? body.transcript.trim() : ''
+              const jobType    = typeof body.jobType    === 'string' ? body.jobType.trim()    : undefined
+              const address    = typeof body.address    === 'string' ? body.address.trim()    : undefined
+
+              if (!transcript) {
+                res.writeHead(400, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify({ error: 'transcript is required' }))
+                return
+              }
+
+              try {
+                const parts: string[] = []
+                if (jobType) parts.push(`Job type: ${jobType}`)
+                if (address) parts.push(`Address: ${address}`)
+                parts.push(`\nTranscript:\n${transcript}`)
+
+                const r = await fetch('https://api.anthropic.com/v1/messages', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type':      'application/json',
+                    'x-api-key':         anthropicApiKey,
+                    'anthropic-version': '2023-06-01',
+                  },
+                  body: JSON.stringify({
+                    model:      'claude-sonnet-4-6',
+                    max_tokens: 4096,
+                    system: `You are a senior estimator and sales writer for Good Guy Builders, a Bay Area home renovation company.
+
+Your job is to turn a transcript of a sales visit into a polished, editable proposal draft.
+
+Output ONLY valid JSON — no markdown, no code fences, no explanation — in this exact shape:
+{
+  "title": string,
+  "intro_text": string,
+  "line_items": [
+    {
+      "item_name": string,
+      "description": string,
+      "unit_price_cents": integer,
+      "quantity": number
+    }
+  ]
+}
+
+Pricing guidelines (Bay Area 2024-2025, all-in with 15% OH&P):
+- Kitchen remodel (full gut): $80k–$150k
+- Bathroom remodel (full): $25k–$55k
+- Flooring per sq ft installed: $12–$22
+- Interior paint per room: $1,200–$2,500
+- Window replacement each: $1,500–$3,500
+- ADU (detached): $200k–$400k
+- Room addition per sq ft: $400–$650
+
+Rules: Break into trade groups, use lump-sum pricing, include Permit & Fees and Project Management lines. Voice: warm and professional, active voice.`,
+                    messages: [{ role: 'user', content: parts.join('\n') }],
+                  }),
+                })
+
+                if (!r.ok) {
+                  const err = await r.text()
+                  res.writeHead(500, { 'Content-Type': 'application/json' })
+                  res.end(JSON.stringify({ error: `AI draft failed: ${err}` }))
+                  return
+                }
+
+                const aiBody = await r.json() as { content?: Array<{ type: string; text?: string }> }
+                const rawText = aiBody.content?.find((c: { type: string }) => c.type === 'text')?.text ?? ''
+                const cleaned = rawText.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim()
+                const draft = JSON.parse(cleaned)
+
+                res.writeHead(200, { 'Content-Type': 'application/json' })
+                res.end(JSON.stringify(draft))
               } catch (err) {
                 res.writeHead(502, { 'Content-Type': 'application/json' })
                 res.end(JSON.stringify({ error: String(err) }))
