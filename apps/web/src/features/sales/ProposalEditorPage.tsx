@@ -435,6 +435,7 @@ export function ProposalEditorPage() {
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [showDeleteConfirm,  setShowDeleteConfirm]  = useState(false)
   const [showAIPanel,        setShowAIPanel]        = useState(false)
+  const [wasAiDrafted,       setWasAiDrafted]       = useState(false)
   const [isDirty, setIsDirty]                 = useState(false)
   const [isSaving, setIsSaving]               = useState(false)
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
@@ -486,6 +487,7 @@ export function ProposalEditorPage() {
       })),
     )
     setShowAIPanel(false)
+    setWasAiDrafted(true)
     setIsDirty(true)
     toast.success('AI draft applied — review and save when ready')
   }
@@ -507,6 +509,7 @@ export function ProposalEditorPage() {
           job_city:      jobCity       || null,
           job_state:     jobState      || null,
           job_zip:       jobZip        || null,
+          ...(wasAiDrafted ? { ai_drafted: true } : {}),
           ...cols,
         }),
         upsertItems.mutateAsync({ proposalId, items }),
@@ -625,6 +628,12 @@ export function ProposalEditorPage() {
             <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${statusMeta.color}`}>
               {statusMeta.label}
             </span>
+            {(proposal.ai_drafted || wasAiDrafted) && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-brand-100 px-2.5 py-1 text-xs font-medium text-brand-700">
+                <SparklesIcon className="h-3 w-3" />
+                AI
+              </span>
+            )}
             <button
               onClick={handleSave}
               disabled={isSaving}
@@ -639,10 +648,14 @@ export function ProposalEditorPage() {
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <button
             onClick={() => setShowAIPanel((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100 transition-colors"
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+              showAIPanel
+                ? 'border-brand-400 bg-brand-100 text-brand-700'
+                : 'border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100'
+            }`}
           >
             <SparklesIcon className="h-3.5 w-3.5" />
-            Draft with AI
+            {showAIPanel ? 'Hide AI Panel' : 'Draft with AI'}
           </button>
           {isDirty && (
             <span className="text-xs text-amber-600 font-medium">Unsaved changes</span>

@@ -109,6 +109,7 @@ export interface Proposal {
   col_quantity: boolean
   col_price: boolean
   status: ProposalStatus
+  ai_drafted: boolean
   portal_token: string | null
   sent_at: string | null
   viewed_at: string | null
