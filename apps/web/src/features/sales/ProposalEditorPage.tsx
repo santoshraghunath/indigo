@@ -13,12 +13,15 @@ import { ProposalPDFDocument } from './ProposalPDFDocument'
 import { useCompanySettings } from '../settings/useCompanySettings'
 import { getProposalStatusMeta, lineTotal, type ProposalLineItem } from './types'
 import { useToast } from '@/stores/toastStore'
+import { useAuth } from '@/hooks/useAuth'
 import { formatMoney } from '@indigo/shared'
+import { AIDraftPanel, type AIDraftResult } from '@/components/AIDraftPanel'
 import {
   ChevronRightIcon,
   PlusIcon,
   TrashIcon,
   EyeIcon,
+  SparklesIcon,
 } from '@/components/ui/Icons'
 
 // ── Draft line item type (client-side, no DB ids yet) ─────────────────────────
@@ -401,6 +404,9 @@ export function ProposalEditorPage() {
   const navigate = useNavigate()
   const toast    = useToast()
 
+  const { session, activeTenantId } = useAuth()
+  const authToken = session?.access_token ?? ''
+
   const { data: lead }     = useLead(leadId)
   const { data: proposal, isLoading: propLoading } = useProposal(proposalId)
   const { data: savedItems = [], isLoading: itemsLoading } = useProposalLineItems(proposalId)
@@ -428,6 +434,7 @@ export function ProposalEditorPage() {
   const [items,           setItems]           = useState<DraftItem[]>([])
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [showDeleteConfirm,  setShowDeleteConfirm]  = useState(false)
+  const [showAIPanel,        setShowAIPanel]        = useState(false)
   const [isDirty, setIsDirty]                 = useState(false)
   const [isSaving, setIsSaving]               = useState(false)
   const [isPdfGenerating, setIsPdfGenerating] = useState(false)
@@ -462,6 +469,26 @@ export function ProposalEditorPage() {
   }, [savedItems])
 
   function markDirty() { setIsDirty(true) }
+
+  // ── Apply AI draft ──────────────────────────────────────────────────────────
+
+  function handleAIApply(draft: AIDraftResult) {
+    setTitle(draft.title)
+    setIntroText(draft.intro_text)
+    setItems(
+      draft.line_items.map((item, i) => ({
+        _key:             crypto.randomUUID(),
+        item_name:        item.item_name,
+        description:      item.description,
+        unit_price_cents: item.unit_price_cents,
+        quantity:         item.quantity,
+        sort_order:       i,
+      })),
+    )
+    setShowAIPanel(false)
+    setIsDirty(true)
+    toast.success('AI draft applied — review and save when ready')
+  }
 
   // ── Save ────────────────────────────────────────────────────────────────────
 
@@ -610,6 +637,13 @@ export function ProposalEditorPage() {
 
         {/* Secondary actions row — wraps on small screens */}
         <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setShowAIPanel((v) => !v)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs font-medium text-brand-700 hover:bg-brand-100 transition-colors"
+          >
+            <SparklesIcon className="h-3.5 w-3.5" />
+            Draft with AI
+          </button>
           {isDirty && (
             <span className="text-xs text-amber-600 font-medium">Unsaved changes</span>
           )}
@@ -650,6 +684,19 @@ export function ProposalEditorPage() {
       {/* ── Editor body ─────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto bg-gray-50 pb-24 lg:pb-8">
         <div className="mx-auto max-w-4xl px-5 py-6 lg:px-8 space-y-6">
+
+          {/* AI Draft Panel */}
+          {showAIPanel && activeTenantId && (
+            <AIDraftPanel
+              tenantId={activeTenantId}
+              authToken={authToken}
+              leadId={leadId || undefined}
+              jobType={lead?.job_type || undefined}
+              address={lead?.job_address ? [lead.job_address, lead.job_city].filter(Boolean).join(', ') : undefined}
+              onApply={handleAIApply}
+              onDismiss={() => setShowAIPanel(false)}
+            />
+          )}
 
           {/* Proposal title */}
           <div>
